@@ -1,7 +1,5 @@
-version: '3.8'
-
 services:
-  postgres:
+  postgres_auth:
     image: postgres:15-alpine
     environment:
       POSTGRES_USER: admin
@@ -10,9 +8,25 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - pgdata_auth:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U admin -d authdb"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  postgres_workout:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: secret
+      POSTGRES_DB: workoutdb
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata_workout:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d workoutdb"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -24,14 +38,29 @@ services:
     ports:
       - "8080:8080"
     environment:
-      DATABASE_URL: "postgres://admin:secret@postgres:5432/authdb?sslmode=disable"
+      DATABASE_URL: "postgres://admin:secret@postgres_auth:5432/authdb?sslmode=disable"
       JWT_SECRET: "my-super-secret-key"
       HTTP_PORT: "8080"
       JWT_ACCESS_TTL: "15m"
       JWT_REFRESH_TTL: "72h"
     depends_on:
-      postgres:
+      postgres_auth:
+        condition: service_healthy
+
+  workout:
+    build:
+      context: .
+      dockerfile: services/workout/Dockerfile
+    ports:
+      - "8081:8081"
+    environment:
+      DATABASE_URL: "postgres://admin:secret@postgres_workout:5432/workoutdb?sslmode=disable"
+      JWT_SECRET: "my-super-secret-key"
+      HTTP_PORT: "8081"
+    depends_on:
+      postgres_workout:
         condition: service_healthy
 
 volumes:
-  pgdata:
+  pgdata_auth:
+  pgdata_workout:

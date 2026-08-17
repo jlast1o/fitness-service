@@ -14,6 +14,7 @@ import (
 var (
 	ErrInvalidWorkoutData = errors.New("invalid workout data")
 	ErrExerciseNotFound   = errors.New("exercise not found")
+	ErrForbbiden          = errors.New("user are not allowed to perform this action")
 )
 
 type WorkoutService struct {
@@ -64,8 +65,8 @@ func (s *WorkoutService) CreateWorkout(ctx context.Context, userID string, name 
 	return workout, nil
 }
 
-func (s *WorkoutService) GetWorkout(ctx context.Context, workoutID string) (*domain.Workout, []domain.ExerciseSet, error) {
-	if workoutID == "" {
+func (s *WorkoutService) GetWorkout(ctx context.Context, userID, workoutID string) (*domain.Workout, []domain.ExerciseSet, error) {
+	if workoutID == "" || userID == "" {
 		return nil, nil, ErrInvalidWorkoutData
 	}
 	workout, sets, err := s.repo.GetWorkoutByID(ctx, workoutID)
@@ -75,6 +76,9 @@ func (s *WorkoutService) GetWorkout(ctx context.Context, workoutID string) (*dom
 	}
 	if workout == nil {
 		return nil, nil, nil // не найдено
+	}
+	if userID != workout.UserID {
+		return nil, nil, ErrForbbiden
 	}
 	return workout, sets, nil
 }
@@ -97,17 +101,47 @@ func (s *WorkoutService) ListWorkouts(ctx context.Context, userID string, limit,
 	return workouts, nil
 }
 
-func (s *WorkoutService) DeleteWorkout(ctx context.Context, workoutID string) error {
-	if workoutID == "" {
+func (s *WorkoutService) DeleteWorkout(ctx context.Context, userID, workoutID string) error {
+	if workoutID == "" || userID == "" {
 		return ErrInvalidWorkoutData
+	}
+	workout, _, err := s.repo.GetWorkoutByID(ctx, workoutID)
+	if err != nil {
+		logger.Log.Error().Err(err).Msg("failed to get workout for deletion")
+		return err
+	}
+
+	if workout == nil {
+		return nil
+	}
+
+	if workout.UserID != userID {
+		return ErrForbbiden
 	}
 	return s.repo.DeleteWorkout(ctx, workoutID)
 }
 
-func (s *WorkoutService) UpdateWorkout(ctx context.Context, workout *domain.Workout) error {
-	if workout == nil || workout.ID == "" {
+func (s *WorkoutService) UpdateWorkout(ctx context.Context, userID string, workout *domain.Workout) error {
+	if workout == nil || workout.ID == "" || userID == "" {
 		return ErrInvalidWorkoutData
 	}
+
+	existing, _, err := s.repo.GetWorkoutByID(ctx, workout.ID)
+	if err != nil {
+		logger.Log.Error().Err(err).Msg("failed to get workout to update")
+		return err
+	}
+
+	if existing == nil {
+		return ErrInvalidWorkoutData
+	}
+
+	if existing.UserID != userID {
+		return ErrForbbiden
+	}
+
+	workout.UserID = existing.UserID
+
 	return s.repo.UpdateWorkout(ctx, workout)
 }
 

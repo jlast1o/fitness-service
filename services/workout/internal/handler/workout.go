@@ -89,24 +89,29 @@ func (h *WorkoutHandler) CreateWorkout(w http.ResponseWriter, r *http.Request) {
 
 // GetWorkout обрабатывает GET /workouts/{id}.
 func (h *WorkoutHandler) GetWorkout(w http.ResponseWriter, r *http.Request) {
-	workoutID := chi.URLParam(r, "id")
-	if workoutID == "" {
-		writeError(w, http.StatusBadRequest, "missing workout id")
+	userID := middleware.GetUserID(r.Context())
+	if userID == "" {
+		writeError(w, http.StatusUnauthorized, "user not authenticated")
 		return
 	}
-
-	workout, sets, err := h.workoutService.GetWorkout(r.Context(), workoutID)
+	workoutID := chi.URLParam(r, "id")
+	workout, sets, err := h.workoutService.GetWorkout(r.Context(), userID, workoutID)
 	if err != nil {
-		logger.Log.Error().Err(err).Msg("failed to get workout")
-		writeError(w, http.StatusInternalServerError, "internal server error")
+		switch {
+		case errors.Is(err, service.ErrForbbiden):
+			writeError(w, http.StatusForbidden, "forbidden")
+		case errors.Is(err, service.ErrInvalidWorkoutData):
+			writeError(w, http.StatusBadRequest, err.Error())
+		default:
+			logger.Log.Error().Err(err).Msg("failed to get workout")
+			writeError(w, http.StatusInternalServerError, "internal server error")
+		}
 		return
 	}
 	if workout == nil {
 		writeError(w, http.StatusNotFound, "workout not found")
 		return
 	}
-
-	// Формируем ответ: можно объединить workout и sets в одну структуру, но для простоты вернём workout и sets отдельно
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"workout": workout,
 		"sets":    sets,
@@ -138,18 +143,24 @@ func (h *WorkoutHandler) ListWorkouts(w http.ResponseWriter, r *http.Request) {
 
 // DeleteWorkout обрабатывает DELETE /workouts/{id}.
 func (h *WorkoutHandler) DeleteWorkout(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.GetUserID(r.Context())
+	if userID == "" {
+		writeError(w, http.StatusUnauthorized, "user not authenticated")
+		return
+	}
 	workoutID := chi.URLParam(r, "id")
-	if workoutID == "" {
-		writeError(w, http.StatusBadRequest, "missing workout id")
-		return
-	}
-
-	err := h.workoutService.DeleteWorkout(r.Context(), workoutID)
+	err := h.workoutService.DeleteWorkout(r.Context(), userID, workoutID)
 	if err != nil {
-		logger.Log.Error().Err(err).Msg("failed to delete workout")
-		writeError(w, http.StatusInternalServerError, "internal server error")
+		switch {
+		case errors.Is(err, service.ErrForbbiden):
+			writeError(w, http.StatusForbidden, "forbidden")
+		case errors.Is(err, service.ErrInvalidWorkoutData):
+			writeError(w, http.StatusBadRequest, err.Error())
+		default:
+			logger.Log.Error().Err(err).Msg("failed to delete workout")
+			writeError(w, http.StatusInternalServerError, "internal server error")
+		}
 		return
 	}
-
 	w.WriteHeader(http.StatusNoContent)
 }

@@ -19,6 +19,7 @@ func NewWorkoutRepo(pool *pgxpool.Pool) repository.WorkoutRepository {
 	return &WorkoutRepo{pool: pool}
 }
 
+// CreateWorkout создаёт тренировку и связанные подходы в одной транзакции.
 func (r *WorkoutRepo) CreateWorkout(ctx context.Context, workout *domain.Workout, sets []domain.ExerciseSet) error {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
@@ -26,6 +27,12 @@ func (r *WorkoutRepo) CreateWorkout(ctx context.Context, workout *domain.Workout
 	}
 	defer tx.Rollback(ctx) // откат, если не закоммитим
 
+	// Гарантируем, что Metrics не nil, чтобы не нарушить NOT NULL ограничение
+	if workout.Metrics == nil {
+		workout.Metrics = map[string]any{}
+	}
+
+	// Вставляем тренировку
 	workoutQuery := `
 		INSERT INTO workouts (user_id, name, date, notes, program_id, template_id, metrics)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -51,15 +58,19 @@ func (r *WorkoutRepo) CreateWorkout(ctx context.Context, workout *domain.Workout
 			INSERT INTO exercise_sets (workout_id, exercise_id, order_index, weight, reps, rpe, metrics)
 			VALUES ($1, $2, $3, $4, $5, $6, $7)
 		`
-		for _, set := range sets {
+		for i := range sets {
+			// Инициализируем Metrics, если nil
+			if sets[i].Metrics == nil {
+				sets[i].Metrics = map[string]any{}
+			}
 			batch.Queue(setQuery,
 				workout.ID,
-				set.ExerciseID,
-				set.OrderIndex,
-				set.Weight,
-				set.Reps,
-				set.RPE,
-				set.Metrics,
+				sets[i].ExerciseID,
+				sets[i].OrderIndex,
+				sets[i].Weight,
+				sets[i].Reps,
+				sets[i].RPE,
+				sets[i].Metrics,
 			)
 		}
 		br := tx.SendBatch(ctx, batch)
@@ -74,6 +85,7 @@ func (r *WorkoutRepo) CreateWorkout(ctx context.Context, workout *domain.Workout
 	return nil
 }
 
+// GetWorkoutByID возвращает тренировку и её подходы.
 func (r *WorkoutRepo) GetWorkoutByID(ctx context.Context, workoutID string) (*domain.Workout, []domain.ExerciseSet, error) {
 	workoutQuery := `
 		SELECT id, user_id, name, date, notes, program_id, template_id, metrics, created_at, updated_at
@@ -120,6 +132,7 @@ func (r *WorkoutRepo) GetWorkoutByID(ctx context.Context, workoutID string) (*do
 	return w, sets, nil
 }
 
+// ListWorkoutsByUser возвращает список тренировок пользователя с пагинацией.
 func (r *WorkoutRepo) ListWorkoutsByUser(ctx context.Context, userID string, limit, offset int) ([]domain.Workout, error) {
 	query := `
 		SELECT id, user_id, name, date, notes, program_id, template_id, metrics, created_at, updated_at
@@ -147,6 +160,7 @@ func (r *WorkoutRepo) ListWorkoutsByUser(ctx context.Context, userID string, lim
 	return workouts, rows.Err()
 }
 
+// DeleteWorkout удаляет тренировку (подходы удалятся каскадно).
 func (r *WorkoutRepo) DeleteWorkout(ctx context.Context, workoutID string) error {
 	_, err := r.pool.Exec(ctx, `DELETE FROM workouts WHERE id = $1`, workoutID)
 	if err != nil {
@@ -155,7 +169,13 @@ func (r *WorkoutRepo) DeleteWorkout(ctx context.Context, workoutID string) error
 	return nil
 }
 
+// UpdateWorkout обновляет основные поля тренировки (без подходов).
 func (r *WorkoutRepo) UpdateWorkout(ctx context.Context, workout *domain.Workout) error {
+	// Гарантируем, что Metrics не nil
+	if workout.Metrics == nil {
+		workout.Metrics = map[string]any{}
+	}
+
 	query := `
 		UPDATE workouts
 		SET name = $2, date = $3, notes = $4, program_id = $5, template_id = $6, metrics = $7, updated_at = NOW()
@@ -170,9 +190,13 @@ func (r *WorkoutRepo) UpdateWorkout(ctx context.Context, workout *domain.Workout
 		workout.TemplateID,
 		workout.Metrics,
 	)
-	return err
+	if err != nil {
+		return fmt.Errorf("update workout: %w", err)
+	}
+	return nil
 }
 
+// ListExercises возвращает все упражнения.
 func (r *WorkoutRepo) ListExercises(ctx context.Context) ([]domain.Exercise, error) {
 	query := `SELECT id, name, muscle_group, category, created_at, updated_at FROM exercises ORDER BY name`
 	rows, err := r.pool.Query(ctx, query)
@@ -192,6 +216,7 @@ func (r *WorkoutRepo) ListExercises(ctx context.Context) ([]domain.Exercise, err
 	return exercises, rows.Err()
 }
 
+// CreateExercise создаёт новое упражнение.
 func (r *WorkoutRepo) CreateExercise(ctx context.Context, exercise *domain.Exercise) error {
 	query := `
 		INSERT INTO exercises (name, muscle_group, category)
@@ -206,6 +231,7 @@ func (r *WorkoutRepo) CreateExercise(ctx context.Context, exercise *domain.Exerc
 	return nil
 }
 
+// GetExerciseByID возвращает упражнение по ID.
 func (r *WorkoutRepo) GetExerciseByID(ctx context.Context, exerciseID string) (*domain.Exercise, error) {
 	query := `SELECT id, name, muscle_group, category, created_at, updated_at FROM exercises WHERE id = $1`
 	e := &domain.Exercise{}

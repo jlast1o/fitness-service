@@ -88,7 +88,7 @@ func (r *WorkoutRepo) CreateWorkout(ctx context.Context, workout *domain.Workout
 	}
 
 	_, err = tx.Exec(ctx,
-		`INSET INTO outbox_events (event_type, payload) VALUES ($1, $2)`, "workout.created", eventPayload)
+		`INSERT INTO outbox_events (event_type, payload) VALUES ($1, $2)`, "workout.created", eventPayload)
 
 	if err != nil {
 		return fmt.Errorf("insert outbox_event: %w", err)

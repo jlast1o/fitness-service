@@ -31,6 +31,18 @@ services:
       timeout: 3s
       retries: 5
 
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
   auth:
     build:
       context: .
@@ -57,10 +69,14 @@ services:
       DATABASE_URL: "postgres://admin:secret@postgres_workout:5432/workoutdb?sslmode=disable"
       JWT_SECRET: "my-super-secret-key"
       HTTP_PORT: "8081"
+      REDIS_ADDR: "redis:6379"
     depends_on:
       postgres_workout:
+        condition: service_healthy
+      redis:
         condition: service_healthy
 
 volumes:
   pgdata_auth:
   pgdata_workout:
+  redisdata:

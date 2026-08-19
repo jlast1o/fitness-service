@@ -79,6 +79,21 @@ func (r *WorkoutRepo) CreateWorkout(ctx context.Context, workout *domain.Workout
 		}
 	}
 
+	eventPayload := map[string]any{
+		"workout_id": workout.ID,
+		"user_id":    workout.UserID,
+		"sets_count": len(sets),
+		"name":       workout.Name,
+		"date":       workout.Date,
+	}
+
+	_, err = tx.Exec(ctx,
+		`INSET INTO outbox_events (event_type, payload) VALUES ($1, $2)`, "workout.created", eventPayload)
+
+	if err != nil {
+		return fmt.Errorf("insert outbox_event: %w", err)
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("commit transaction: %w", err)
 	}
@@ -243,4 +258,54 @@ func (r *WorkoutRepo) GetExerciseByID(ctx context.Context, exerciseID string) (*
 		return nil, fmt.Errorf("query exercise: %w", err)
 	}
 	return e, nil
+}
+
+// CreateOutboxEvent вставляет новое событие в outbox.
+func (r *WorkoutRepo) CreateOutboxEvent(ctx context.Context, event *domain.OutboxEvent) error {
+	if event.Payload == nil {
+		event.Payload = map[string]any{}
+	}
+	query := `INSERT INTO outbox_events (event_type, payload) VALUES ($1, $2) RETURNING id, created_at`
+	err := r.pool.QueryRow(ctx, query, event.EventType, event.Payload).Scan(&event.ID, &event.CreatedAt)
+	if err != nil {
+		return fmt.Errorf("insert outbox event: %w", err)
+	}
+	return nil
+}
+
+// ListPendingOutboxEvents возвращает неопубликованные события.
+func (r *WorkoutRepo) ListPendingOutboxEvents(ctx context.Context, limit int) ([]domain.OutboxEvent, error) {
+	query := `
+		SELECT id, event_type, payload, created_at, published_at
+		FROM outbox_events
+		WHERE published_at IS NULL
+		ORDER BY created_at
+		LIMIT $1
+	`
+	rows, err := r.pool.Query(ctx, query, limit)
+	if err != nil {
+		return nil, fmt.Errorf("query pending outbox events: %w", err)
+	}
+	defer rows.Close()
+
+	var events []domain.OutboxEvent
+	for rows.Next() {
+		var e domain.OutboxEvent
+		if err := rows.Scan(
+			&e.ID, &e.EventType, &e.Payload, &e.CreatedAt, &e.PublishedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan outbox event: %w", err)
+		}
+		events = append(events, e)
+	}
+	return events, rows.Err()
+}
+
+// MarkOutboxEventPublished помечает событие как опубликованное.
+func (r *WorkoutRepo) MarkOutboxEventPublished(ctx context.Context, eventID string) error {
+	_, err := r.pool.Exec(ctx, `UPDATE outbox_events SET published_at = NOW() WHERE id = $1`, eventID)
+	if err != nil {
+		return fmt.Errorf("mark outbox event published: %w", err)
+	}
+	return nil
 }

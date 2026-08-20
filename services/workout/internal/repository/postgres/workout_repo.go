@@ -79,12 +79,21 @@ func (r *WorkoutRepo) CreateWorkout(ctx context.Context, workout *domain.Workout
 		}
 	}
 
+	setsForEvent := make([]map[string]any, 0, len(sets))
+	for _, s := range sets {
+		setsForEvent = append(setsForEvent, map[string]any{
+			"exercise_id": s.ExerciseID,
+			"weight":      s.Weight,
+			"reps":        s.Reps,
+		})
+	}
 	eventPayload := map[string]any{
 		"workout_id": workout.ID,
 		"user_id":    workout.UserID,
 		"sets_count": len(sets),
 		"name":       workout.Name,
 		"date":       workout.Date,
+		"sets":       setsForEvent,
 	}
 
 	_, err = tx.Exec(ctx,

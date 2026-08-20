@@ -123,3 +123,23 @@ func calculate1RM(weight float64, reps int) float64 {
 	}
 	return weight * (1 + float64(reps)/30.0)
 }
+
+// GetUserStats возвращает агрегированную статистику пользователя.
+func (s *AnalyticsService) GetUserStats(ctx context.Context, userID string) (*domain.UserStats, error) {
+	return s.repo.GetUserStats(ctx, userID)
+}
+
+// GetExerciseProgress возвращает прогресс по конкретному упражнению.
+func (s *AnalyticsService) GetExerciseProgress(ctx context.Context, userID, exerciseID string) (*domain.ExerciseProgress, error) {
+	return s.repo.GetExerciseProgress(ctx, userID, exerciseID)
+}
+
+// ListExerciseProgress возвращает прогресс по всем упражнениям пользователя.
+func (s *AnalyticsService) ListExerciseProgress(ctx context.Context, userID string) ([]domain.ExerciseProgress, error) {
+	return s.repo.ListExerciseProgress(ctx, userID)
+}
+
+// ListWorkoutSummaries возвращает список сводок тренировок.
+func (s *AnalyticsService) ListWorkoutSummaries(ctx context.Context, userID string, limit, offset int) ([]domain.WorkoutSummary, error) {
+	return s.repo.ListWorkoutSummaries(ctx, userID, limit, offset)
+}

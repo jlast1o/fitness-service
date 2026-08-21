@@ -8,6 +8,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
+	"github.com/rs/cors"
 
 	"fitness-platform/pkg/logger"
 	"fitness-platform/pkg/middleware"
@@ -19,7 +20,12 @@ import (
 // Возвращает функцию graceful shutdown.
 func RunREST(addr string, analyticsHandler *handler.AnalyticsHandler, jwtSecret string) (func(context.Context) error, error) {
 	r := chi.NewRouter()
-
+	r.Use(cors.New(cors.Options{
+		AllowedOrigins:   []string{"http://localhost:3000"},
+		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type"},
+		AllowCredentials: true,
+	}).Handler)
 	// Базовые middleware для всех маршрутов
 	r.Use(chimiddleware.RequestID)
 	r.Use(chimiddleware.RealIP)

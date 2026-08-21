@@ -3,17 +3,20 @@ package server
 import (
 	"context"
 	"errors"
-	"fitness-platform/pkg/logger"
-	"fitness-platform/services/auth/internal/handler"
 	"net/http"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/rs/cors"
+
+	"fitness-platform/pkg/logger"
+	"fitness-platform/pkg/middleware"
+	"fitness-platform/services/planner/internal/handler"
 )
 
-func RunREST(addr string, authHandler *handler.AuthHandler) (func(context.Context) error, error) {
+// RunREST запускает HTTP-сервер с chi роутером.
+func RunREST(addr string, plannerHandler *handler.PlannerHandler, jwtSecret string) (func(context.Context) error, error) {
 	r := chi.NewRouter()
 	r.Use(cors.New(cors.Options{
 		AllowedOrigins:   []string{"http://localhost:3000"},
@@ -26,8 +29,16 @@ func RunREST(addr string, authHandler *handler.AuthHandler) (func(context.Contex
 	r.Use(chimiddleware.Logger)
 	r.Use(chimiddleware.Recoverer)
 
-	r.Post("/auth/register", authHandler.Register)
-	r.Post("/auth/login", authHandler.Login)
+	r.Group(func(r chi.Router) {
+		r.Use(middleware.JWTAuth(jwtSecret))
+
+		r.Post("/planner/profile", plannerHandler.UpsertProfile)
+		r.Get("/planner/profile", plannerHandler.GetProfile)
+		r.Get("/planner/exercises", plannerHandler.ListExercises)
+		r.Post("/planner/plans", plannerHandler.GeneratePlan)
+		r.Get("/planner/plans/current", plannerHandler.GetCurrentPlan)
+		r.Get("/planner/next-workout", plannerHandler.GetNextWorkout)
+	})
 
 	srv := &http.Server{
 		Addr:         addr,
@@ -38,17 +49,16 @@ func RunREST(addr string, authHandler *handler.AuthHandler) (func(context.Contex
 	}
 
 	go func() {
-		logger.Log.Info().Str("addr", addr).Msg("HTTP server starting")
+		logger.Log.Info().Str("addr", addr).Msg("Planner HTTP server starting")
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			logger.Log.Fatal().Err(err).Msg("http server failed")
+			logger.Log.Fatal().Err(err).Msg("Planner HTTP server failed")
 		}
 	}()
 
 	shutdownFunc := func(ctx context.Context) error {
-		logger.Log.Info().Msg("shutting down HTTP server")
+		logger.Log.Info().Msg("shutting down Planner HTTP server")
 		return srv.Shutdown(ctx)
 	}
 
 	return shutdownFunc, nil
-
 }

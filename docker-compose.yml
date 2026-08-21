@@ -111,8 +111,42 @@ services:
       redis:
         condition: service_healthy
 
+  postgres_planner:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: secret
+      POSTGRES_DB: plannerdb
+    ports:
+      - "5435:5432"
+    volumes:
+      - pgdata_planner:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d plannerdb"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  planner:
+    build:
+      context: .
+      dockerfile: services/planner/Dockerfile
+    ports:
+      - "8083:8083"
+    environment:
+      DATABASE_URL: "postgres://admin:secret@postgres_planner:5432/plannerdb?sslmode=disable"
+      JWT_SECRET: "my-super-secret-key"
+      HTTP_PORT: "8083"
+      REDIS_ADDR: "redis:6379"
+    depends_on:
+      postgres_planner:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
 volumes:
   pgdata_auth:
   pgdata_workout:
   pgdata_analytics:   # новый volume для аналитики
+  pgdata_planner:
   redisdata:

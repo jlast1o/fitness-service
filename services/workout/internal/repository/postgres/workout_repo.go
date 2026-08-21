@@ -81,11 +81,16 @@ func (r *WorkoutRepo) CreateWorkout(ctx context.Context, workout *domain.Workout
 
 	setsForEvent := make([]map[string]any, 0, len(sets))
 	for _, s := range sets {
-		setsForEvent = append(setsForEvent, map[string]any{
+		setData := map[string]any{
 			"exercise_id": s.ExerciseID,
 			"weight":      s.Weight,
 			"reps":        s.Reps,
-		})
+		}
+		// Добавляем RPE, если он указан (не нулевой)
+		if s.RPE > 0 {
+			setData["rpe"] = s.RPE
+		}
+		setsForEvent = append(setsForEvent, setData)
 	}
 	eventPayload := map[string]any{
 		"workout_id": workout.ID,

@@ -31,6 +31,23 @@ services:
       timeout: 3s
       retries: 5
 
+  # === НОВЫЙ БЛОК: База данных для аналитики ===
+  postgres_analytics:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: secret
+      POSTGRES_DB: analyticsdb
+    ports:
+      - "5434:5432"   # Наружу пробрасываем на 5434, чтобы не конфликтовать
+    volumes:
+      - pgdata_analytics:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d analyticsdb"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
   redis:
     image: redis:7-alpine
     ports:
@@ -76,7 +93,26 @@ services:
       redis:
         condition: service_healthy
 
+  # === НОВЫЙ БЛОК: Сервис аналитики ===
+  analytics:
+    build:
+      context: .
+      dockerfile: services/analytics/Dockerfile
+    ports:
+      - "8082:8082"
+    environment:
+      DATABASE_URL: "postgres://admin:secret@postgres_analytics:5432/analyticsdb?sslmode=disable"
+      JWT_SECRET: "my-super-secret-key"
+      HTTP_PORT: "8082"
+      REDIS_ADDR: "redis:6379"
+    depends_on:
+      postgres_analytics:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
 volumes:
   pgdata_auth:
   pgdata_workout:
+  pgdata_analytics:   # новый volume для аналитики
   redisdata:

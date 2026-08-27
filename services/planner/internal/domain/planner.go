@@ -73,3 +73,9 @@ type AvailableExercise struct {
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
 }
+
+// WorkoutReminder — напоминание о предстоящей тренировке.
+type WorkoutReminder struct {
+	UserID  string `json:"user_id"`
+	Message string `json:"message"`
+}

@@ -478,3 +478,34 @@ func (r *PlannerRepo) UpdatePlannedExercise(ctx context.Context, exercise *domai
 	}
 	return nil
 }
+
+// GetUpcomingWorkouts возвращает предстоящие тренировки для напоминаний.
+func (r *PlannerRepo) GetUpcomingWorkouts(ctx context.Context, from, to time.Time) ([]domain.WorkoutReminder, error) {
+	query := `
+		SELECT tp.user_id, pd.name, pd.date
+		FROM plan_days pd
+		JOIN plan_weeks pw ON pd.week_id = pw.id
+		JOIN training_plans tp ON pw.plan_id = tp.id
+		WHERE tp.status = 'active' AND pd.date BETWEEN $1 AND $2
+		ORDER BY pd.date
+	`
+	rows, err := r.pool.Query(ctx, query, from, to)
+	if err != nil {
+		return nil, fmt.Errorf("query upcoming workouts: %w", err)
+	}
+	defer rows.Close()
+
+	var reminders []domain.WorkoutReminder
+	for rows.Next() {
+		var userID, dayName string
+		var date time.Time
+		if err := rows.Scan(&userID, &dayName, &date); err != nil {
+			return nil, fmt.Errorf("scan upcoming workout: %w", err)
+		}
+		reminders = append(reminders, domain.WorkoutReminder{
+			UserID:  userID,
+			Message: fmt.Sprintf("Напоминание: тренировка '%s' запланирована на %s", dayName, date.Format("02.01.2006")),
+		})
+	}
+	return reminders, rows.Err()
+}

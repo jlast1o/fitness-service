@@ -37,4 +37,7 @@ type PlannerRepository interface {
 
 	// Получение запланированных упражнений на конкретную дату (для адаптации)
 	GetPlannedExercisesForDate(ctx context.Context, userID string, date time.Time) ([]domain.PlannedExercise, error)
+
+	// GetUpcomingWorkouts возвращает предстоящие тренировки для напоминаний.
+	GetUpcomingWorkouts(ctx context.Context, from, to time.Time) ([]domain.WorkoutReminder, error)
 }

@@ -257,3 +257,11 @@ func (s *PlannerService) GetNextWorkout(ctx context.Context, userID string) (*do
 	}
 	return day, exercises, nil
 }
+
+// GetUpcomingWorkouts возвращает предстоящие тренировки для напоминаний.
+func (s *PlannerService) GetUpcomingWorkouts(ctx context.Context, from, to time.Time) ([]domain.WorkoutReminder, error) {
+	if from.After(to) {
+		return nil, ErrInvalidInput
+	}
+	return s.repo.GetUpcomingWorkouts(ctx, from, to)
+}

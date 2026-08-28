@@ -29,6 +29,8 @@ func RunREST(addr string, plannerHandler *handler.PlannerHandler, jwtSecret stri
 	r.Use(chimiddleware.Logger)
 	r.Use(chimiddleware.Recoverer)
 
+	r.Get("/internal/reminders", plannerHandler.Reminders)
+
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.JWTAuth(jwtSecret))
 

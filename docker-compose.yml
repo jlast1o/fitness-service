@@ -143,6 +143,17 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+  notification:
+    build:
+      context: .
+      dockerfile: services/notification/Dockerfile
+    environment:
+      REDIS_ADDR: "redis:6379"
+      PLANNER_BASE_URL: "http://planner:8083"
+      INTERNAL_TOKEN: "dev-secret-token"
+    depends_on:
+      - redis
+      - planner
 
 volumes:
   pgdata_auth:

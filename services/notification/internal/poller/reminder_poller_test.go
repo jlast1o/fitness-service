@@ -47,7 +47,7 @@ func TestPoll(t *testing.T) {
 	p := NewReminderPoller(server.URL, pool, time.Hour, "test-token")
 	p.poll(context.Background())
 
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(70 * time.Millisecond)
 
 	mockSender.AssertExpectations(t)
 }

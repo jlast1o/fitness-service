@@ -22,6 +22,17 @@ func NewAnalyticsService(repo repository.AnalyticsRepository) *AnalyticsService 
 // ProcessWorkoutCreated обрабатывает событие о новой тренировке.
 func (s *AnalyticsService) ProcessWorkoutCreated(ctx context.Context, event domain.WorkoutCreatedEvent) error {
 	// 1. Считаем общий объём и агрегируем по упражнениям
+	// Проверяем, не обработано ли уже это событие
+	processed, err := s.repo.IsEventProcessed(ctx, event.WorkoutID)
+	if err != nil {
+		logger.Log.Error().Err(err).Str("event_id", event.WorkoutID).Msg("failed to check processed event")
+		return err
+	}
+	if processed {
+		logger.Log.Info().Str("event_id", event.WorkoutID).Msg("event already processed, skipping")
+		return nil
+	}
+
 	totalVolume := 0.0
 	totalRepsAll := 0
 	exerciseAgg := make(map[string]*struct {

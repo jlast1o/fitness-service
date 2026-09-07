@@ -17,4 +17,9 @@ type AnalyticsRepository interface {
 
 	InsertWorkoutSummary(ctx context.Context, summary *domain.WorkoutSummary) error
 	ListWorkoutSummaries(ctx context.Context, userID string, limit, offset int) ([]domain.WorkoutSummary, error)
+
+	// IsEventProcessed проверяет, было ли событие с таким ID уже обработано.
+	IsEventProcessed(ctx context.Context, eventID string) (bool, error)
+	// MarkEventProcessed помечает событие как обработанное.
+	MarkEventProcessed(ctx context.Context, eventID string) error
 }

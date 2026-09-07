@@ -40,4 +40,7 @@ type PlannerRepository interface {
 
 	// GetUpcomingWorkouts возвращает предстоящие тренировки для напоминаний.
 	GetUpcomingWorkouts(ctx context.Context, from, to time.Time) ([]domain.WorkoutReminder, error)
+
+	// DeactivateActivePlans помечает все активные планы пользователя как completed (или paused).
+	DeactivateActivePlans(ctx context.Context, userID string) error
 }

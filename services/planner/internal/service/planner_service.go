@@ -216,11 +216,15 @@ func (s *PlannerService) GenerateAndSavePlan(ctx context.Context, userID string,
 	if profile == nil {
 		return nil, ErrInvalidInput // или ErrProfileNotFound, но для простоты так
 	}
-
 	generator := NewPlanGenerator(s.repo)
 	plan, weeks, days, exercises, err := generator.GeneratePlan(ctx, profile, startDate, durationWeeks)
 	if err != nil {
 		logger.Log.Error().Err(err).Msg("failed to generate plan")
+		return nil, err
+	}
+
+	if err := s.repo.DeactivateActivePlans(ctx, userID); err != nil {
+		logger.Log.Error().Err(err).Str("user_id", userID).Msg("failed to deactivate old plans")
 		return nil, err
 	}
 

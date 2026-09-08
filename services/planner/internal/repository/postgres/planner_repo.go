@@ -509,3 +509,10 @@ func (r *PlannerRepo) GetUpcomingWorkouts(ctx context.Context, from, to time.Tim
 	}
 	return reminders, rows.Err()
 }
+func (r *PlannerRepo) DeactivateActivePlans(ctx context.Context, userID string) error {
+	_, err := r.pool.Exec(ctx, `UPDATE training_plans SET status = 'completed', updated_at = NOW() WHERE user_id = $1 AND status = 'active'`, userID)
+	if err != nil {
+		return fmt.Errorf("deactivate active plans: %w", err)
+	}
+	return nil
+}

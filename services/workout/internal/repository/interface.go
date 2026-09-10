@@ -16,6 +16,8 @@ type WorkoutRepository interface {
 	CreateExercise(ctx context.Context, exercise *domain.Exercise) error
 	GetExerciseByID(ctx context.Context, exerciseID string) (*domain.Exercise, error)
 
+	UpdateWorkoutWithSets(ctx context.Context, workout *domain.Workout, sets []domain.ExerciseSet) error
+
 	CreateOutboxEvent(ctx context.Context, event *domain.OutboxEvent) error
 	ListPendingOutboxEvents(ctx context.Context, limit int) ([]domain.OutboxEvent, error)
 	MarkOutboxEventPublished(ctx context.Context, eventID string) error

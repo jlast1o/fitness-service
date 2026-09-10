@@ -323,3 +323,101 @@ func (r *WorkoutRepo) MarkOutboxEventPublished(ctx context.Context, eventID stri
 	}
 	return nil
 }
+
+// UpdateWorkoutWithSets обновляет тренировку и полностью заменяет её подходы.
+func (r *WorkoutRepo) UpdateWorkoutWithSets(ctx context.Context, workout *domain.Workout, sets []domain.ExerciseSet) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	// 1. Гарантируем, что Metrics не nil
+	if workout.Metrics == nil {
+		workout.Metrics = map[string]any{}
+	}
+
+	// 2. Обновляем основную запись тренировки
+	updateQuery := `
+		UPDATE workouts
+		SET name = $2, date = $3, notes = $4, program_id = $5, template_id = $6, metrics = $7, updated_at = NOW()
+		WHERE id = $1
+	`
+	res, err := tx.Exec(ctx, updateQuery,
+		workout.ID,
+		workout.Name,
+		workout.Date,
+		workout.Notes,
+		workout.ProgramID,
+		workout.TemplateID,
+		workout.Metrics,
+	)
+	if err != nil {
+		return fmt.Errorf("update workout: %w", err)
+	}
+	if res.RowsAffected() == 0 {
+		return fmt.Errorf("workout not found")
+	}
+
+	// 3. Удаляем старые подходы
+	if _, err := tx.Exec(ctx, `DELETE FROM exercise_sets WHERE workout_id = $1`, workout.ID); err != nil {
+		return fmt.Errorf("delete old sets: %w", err)
+	}
+
+	// 4. Вставляем новые подходы пакетом
+	if len(sets) > 0 {
+		batch := &pgx.Batch{}
+		setQuery := `
+			INSERT INTO exercise_sets (workout_id, exercise_id, order_index, weight, reps, rpe, metrics)
+			VALUES ($1, $2, $3, $4, $5, $6, $7)
+		`
+		for i := range sets {
+			if sets[i].Metrics == nil {
+				sets[i].Metrics = map[string]any{}
+			}
+			batch.Queue(setQuery,
+				workout.ID,
+				sets[i].ExerciseID,
+				sets[i].OrderIndex,
+				sets[i].Weight,
+				sets[i].Reps,
+				sets[i].RPE,
+				sets[i].Metrics,
+			)
+		}
+		br := tx.SendBatch(ctx, batch)
+		if err := br.Close(); err != nil {
+			return fmt.Errorf("insert new sets: %w", err)
+		}
+	}
+
+	// 5. Пишем событие в outbox
+	setsForEvent := make([]map[string]any, 0, len(sets))
+	for _, s := range sets {
+		setData := map[string]any{
+			"exercise_id": s.ExerciseID,
+			"weight":      s.Weight,
+			"reps":        s.Reps,
+		}
+		if s.RPE > 0 {
+			setData["rpe"] = s.RPE
+		}
+		setsForEvent = append(setsForEvent, setData)
+	}
+	eventPayload := map[string]any{
+		"workout_id": workout.ID,
+		"user_id":    workout.UserID,
+		"sets_count": len(sets),
+		"name":       workout.Name,
+		"date":       workout.Date,
+		"sets":       setsForEvent,
+	}
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO outbox_events (event_type, payload) VALUES ($1, $2)`,
+		"workout.updated", eventPayload,
+	); err != nil {
+		return fmt.Errorf("insert outbox event: %w", err)
+	}
+
+	return tx.Commit(ctx)
+}

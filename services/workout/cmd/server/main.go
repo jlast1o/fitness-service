@@ -51,8 +51,19 @@ func main() {
 	// 6. Создаём репозиторий
 	workoutRepo := postgres.NewWorkoutRepo(pool)
 
+	redisClient := redis.NewClient(&redis.Options{
+		Addr: cfg.RedisAddr,
+	})
+	if err := redisClient.Ping(ctx).Err(); err != nil {
+		logger.Log.Fatal().Err(err).Msg("failed to ping redis")
+	}
+	defer redisClient.Close()
+
 	// 7. Создаём сервис
-	workoutService := service.NewWorkoutService(workoutRepo)
+	workoutService := service.NewWorkoutService(
+		workoutRepo,
+		service.WithRedis(redisClient),
+	)
 
 	// 8. Создаём обработчики
 	workoutHandler := handler.NewWorkoutHandler(workoutService)
@@ -62,14 +73,6 @@ func main() {
 	if err != nil {
 		logger.Log.Fatal().Err(err).Msg("Failed to start HTTP server")
 	}
-
-	redisClient := redis.NewClient(&redis.Options{
-		Addr: cfg.RedisAddr,
-	})
-	if err := redisClient.Ping(ctx).Err(); err != nil {
-		logger.Log.Fatal().Err(err).Msg("failed to ping redis")
-	}
-	defer redisClient.Close()
 
 	publisher := outbox.NewPublisher(workoutRepo, redisClient, "workout.events", 5*time.Second)
 

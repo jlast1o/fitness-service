@@ -76,6 +76,31 @@ func (m *MockWorkoutRepo) GetExerciseByID(ctx context.Context, exerciseID string
 	return args.Get(0).(*domain.Exercise), args.Error(1)
 }
 
+func (m *MockWorkoutRepo) CreateOutboxEvent(ctx context.Context, event *domain.OutboxEvent) error {
+	args := m.Called(ctx, event)
+	return args.Error(0)
+}
+
+func (m *MockWorkoutRepo) UpdateWorkoutWithSets(ctx context.Context, workout *domain.Workout, sets []domain.ExerciseSet) error {
+	args := m.Called(ctx, workout, sets)
+	return args.Error(0)
+}
+
+func (m *MockWorkoutRepo) ListPendingOutboxEvents(ctx context.Context, limit int) ([]domain.OutboxEvent, error) {
+	args := m.Called(ctx, limit)
+
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+
+	return args.Get(0).([]domain.OutboxEvent), args.Error(1)
+}
+
+func (m *MockWorkoutRepo) MarkOutboxEventPublished(ctx context.Context, eventID string) error {
+	args := m.Called(ctx, eventID)
+	return args.Error(0)
+}
+
 // Тесты
 
 func TestCreateWorkout_Success(t *testing.T) {

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"time"
 
+	"github.com/redis/go-redis/v9"
+
 	"fitness-platform/pkg/logger"
 	"fitness-platform/services/workout/internal/domain"
 	"fitness-platform/services/workout/internal/repository"
@@ -18,11 +20,28 @@ var (
 )
 
 type WorkoutService struct {
-	repo repository.WorkoutRepository
+	repo        repository.WorkoutRepository
+	redisClient redis.Cmdable
 }
 
-func NewWorkoutService(repo repository.WorkoutRepository) *WorkoutService {
-	return &WorkoutService{repo: repo}
+type Option func(*WorkoutService)
+
+func WithRedis(client redis.Cmdable) Option {
+	return func(s *WorkoutService) {
+		s.redisClient = client
+	}
+}
+
+func NewWorkoutService(repo repository.WorkoutRepository, opts ...Option) *WorkoutService {
+	s := &WorkoutService{
+		repo: repo,
+	}
+
+	for _, opt := range opts {
+		opt(s)
+	}
+
+	return s
 }
 
 func (s *WorkoutService) CreateWorkout(ctx context.Context, userID string, name string, date time.Time, notes string, sets []domain.ExerciseSet) (*domain.Workout, error) {

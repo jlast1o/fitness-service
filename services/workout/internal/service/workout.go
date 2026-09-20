@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -19,16 +20,20 @@ var (
 	ErrForbbiden          = errors.New("user are not allowed to perform this action")
 )
 
+const exercisesCacheKey = "workout:exercises:all"
+
 type WorkoutService struct {
-	repo        repository.WorkoutRepository
-	redisClient redis.Cmdable
+	repo             repository.WorkoutRepository
+	redisClient      redis.Cmdable
+	exerciseCacheTTL time.Duration
 }
 
 type Option func(*WorkoutService)
 
-func WithRedis(client redis.Cmdable) Option {
+func WithRedis(client redis.Cmdable, cacheTTL time.Duration) Option {
 	return func(s *WorkoutService) {
 		s.redisClient = client
+		s.exerciseCacheTTL = cacheTTL
 	}
 }
 
@@ -165,12 +170,68 @@ func (s *WorkoutService) UpdateWorkout(ctx context.Context, userID string, worko
 }
 
 func (s *WorkoutService) ListExercises(ctx context.Context) ([]domain.Exercise, error) {
-	return s.repo.ListExercises(ctx)
+	if s.redisClient != nil {
+		cached, err := s.redisClient.Get(ctx, exercisesCacheKey).Bytes()
+
+		if err == nil {
+			var exercises []domain.Exercise
+
+			if err := json.Unmarshal(cached, &exercises); err == nil {
+				return exercises, nil
+			} else {
+				logger.Log.Warn().
+					Err(err).
+					Msg("failed to unmarshal exercises cache")
+			}
+		} else if !errors.Is(err, redis.Nil) {
+			logger.Log.Warn().
+				Err(err).
+				Msg("failed to read exercises cache")
+		}
+	}
+
+	exercises, err := s.repo.ListExercises(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if s.redisClient != nil {
+		data, err := json.Marshal(exercises)
+		if err != nil {
+			logger.Log.Warn().
+				Err(err).
+				Msg("failed to marshal exercise cache")
+		} else if err := s.redisClient.Set(
+			ctx,
+			exercisesCacheKey,
+			data,
+			s.exerciseCacheTTL,
+		).Err(); err != nil {
+			logger.Log.Warn().
+				Err(err).
+				Msg("failed to write exercises cache")
+		}
+	}
+
+	return exercises, nil
 }
 
 func (s *WorkoutService) CreateExercise(ctx context.Context, exercise *domain.Exercise) error {
 	if exercise == nil || exercise.Name == "" || exercise.MuscleGroup == "" {
 		return ErrInvalidWorkoutData
 	}
-	return s.repo.CreateExercise(ctx, exercise)
+
+	if err := s.repo.CreateExercise(ctx, exercise); err != nil {
+		return err
+	}
+
+	if s.redisClient != nil {
+		if err := s.redisClient.Del(ctx, exercisesCacheKey).Err(); err != nil {
+			logger.Log.Warn().
+				Err(err).
+				Msg("failed to invalidate exercises cache")
+		}
+	}
+
+	return nil
 }

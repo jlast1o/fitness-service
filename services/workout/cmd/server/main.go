@@ -69,7 +69,20 @@ func main() {
 	workoutHandler := handler.NewWorkoutHandler(workoutService)
 
 	// 9. Запускаем HTTP-сервер с JWT
-	httpShutdown, err := server.RunREST(fmt.Sprintf(":%s", cfg.HTTPPort), workoutHandler, cfg.JWTSecret)
+	httpShutdown, err := server.RunREST(
+		fmt.Sprintf(":%s", cfg.HTTPPort),
+		workoutHandler,
+		cfg.JWTSecret,
+
+		func(ctx context.Context) error {
+			return pool.Ping(ctx)
+		},
+
+		func(ctx context.Context) error {
+			return redisClient.Ping(ctx).Err()
+		},
+	)
+
 	if err != nil {
 		logger.Log.Fatal().Err(err).Msg("Failed to start HTTP server")
 	}

@@ -14,13 +14,15 @@ import (
 	"fitness-platform/services/workout/internal/handler"
 )
 
-func RunREST(addr string, workoutHandler *handler.WorkoutHandler, jwtSecret string) (func(context.Context) error, error) {
+func RunREST(addr string, workoutHandler *handler.WorkoutHandler, jwtSecret string, ReadinessChecks ...ReadinessCheck) (func(context.Context) error, error) {
 	r := chi.NewRouter()
 
 	r.Use(chimiddleware.RequestID)
 	r.Use(chimiddleware.RealIP)
 	r.Use(chimiddleware.Logger)
 	r.Use(chimiddleware.Recoverer)
+	r.Get("/health/live", liveHandler)
+	r.Get("/health/ready", readyHandler(ReadinessChecks...))
 
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.JWTAuth(jwtSecret))

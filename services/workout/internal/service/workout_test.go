@@ -16,6 +16,8 @@ import (
 	"fitness-platform/services/workout/internal/service"
 )
 
+const testExercisesCacheKey = "workout:exercises:all"
+
 // MockWorkoutRepo — мок-реализация интерфейса repository.WorkoutRepository.
 type MockWorkoutRepo struct {
 	mock.Mock
@@ -303,8 +305,6 @@ func TestCreateExercise_Success(t *testing.T) {
 	assert.NotEmpty(t, exercise.ID)
 	mockRepo.AssertExpectations(t)
 }
-
-const testExercisesCacheKey = "workout:exercises:all"
 
 func newTestRedis(t *testing.T) *redis.Client {
 	t.Helper()

@@ -44,7 +44,14 @@ func main() {
 
 	authHandler := handler.NewAuthHandler(authService)
 
-	httpShutdown, err := server.RunREST(fmt.Sprintf(":%s", cfg.HTTPPort), authHandler)
+	httpShutdown, err := server.RunREST(
+		fmt.Sprintf(":%s", cfg.HTTPPort),
+		authHandler,
+		func(ctx context.Context) error {
+			return pool.Ping(ctx)
+		},
+	)
+
 	if err != nil {
 		logger.Log.Fatal().Err(err).Msg("Failed to start HTTP server")
 	}

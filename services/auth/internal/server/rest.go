@@ -13,7 +13,11 @@ import (
 	"github.com/rs/cors"
 )
 
-func RunREST(addr string, authHandler *handler.AuthHandler) (func(context.Context) error, error) {
+func RunREST(
+	addr string,
+	authHandler *handler.AuthHandler,
+	readinessChecks ...ReadinessCheck,
+) (func(context.Context) error, error) {
 	r := chi.NewRouter()
 	r.Use(cors.New(cors.Options{
 		AllowedOrigins:   []string{"http://localhost:3000"},
@@ -25,6 +29,8 @@ func RunREST(addr string, authHandler *handler.AuthHandler) (func(context.Contex
 	r.Use(chimiddleware.RealIP)
 	r.Use(chimiddleware.Logger)
 	r.Use(chimiddleware.Recoverer)
+	r.Get("/health/live", liveHandler)
+	r.Get("/health/ready", readyHandler(readinessChecks...))
 
 	r.Post("/auth/register", authHandler.Register)
 	r.Post("/auth/login", authHandler.Login)

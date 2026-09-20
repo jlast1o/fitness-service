@@ -15,7 +15,8 @@ type Config struct {
 	JWTAccessTTL  time.Duration `envconfig:"JWT_ACCESS_TTL" default:"15m"`
 	JWTRefreshTTL time.Duration `envconfig:"JWT_REFRESH_TTL" default:"72h"`
 
-	RedisAddr string `envconfig:"REDIS_ADDR" default:"localhost:6379"`
+	RedisAddr        string        `envconfig:"REDIS_ADDR" default:"localhost:6379"`
+	ExerciseCacheTTL time.Duration `envconfig:"EXERCISE_CACHE_TTL" default:"10m"`
 }
 
 func Load() (*Config, error) {

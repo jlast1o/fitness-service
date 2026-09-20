@@ -62,7 +62,7 @@ func main() {
 	// 7. Создаём сервис
 	workoutService := service.NewWorkoutService(
 		workoutRepo,
-		service.WithRedis(redisClient),
+		service.WithRedis(redisClient, cfg.ExerciseCacheTTL),
 	)
 
 	// 8. Создаём обработчики

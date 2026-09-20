@@ -2,9 +2,12 @@ package service_test
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
+	"github.com/alicebob/miniredis/v2"
+	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -298,5 +301,154 @@ func TestCreateExercise_Success(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.NotEmpty(t, exercise.ID)
+	mockRepo.AssertExpectations(t)
+}
+
+const testExercisesCacheKey = "workout:exercises:all"
+
+func newTestRedis(t *testing.T) *redis.Client {
+	t.Helper()
+
+	mr, err := miniredis.Run()
+	require.NoError(t, err)
+
+	client := redis.NewClient(&redis.Options{
+		Addr: mr.Addr(),
+	})
+
+	t.Cleanup(func() {
+		_ = client.Close()
+		mr.Close()
+	})
+
+	return client
+}
+
+func TestListExercises_CacheHit(t *testing.T) {
+	ctx := context.Background()
+
+	mockRepo := new(MockWorkoutRepo)
+	redisClient := newTestRedis(t)
+
+	svc := service.NewWorkoutService(
+		mockRepo,
+		service.WithRedis(redisClient, 10*time.Minute),
+	)
+
+	expectedExercises := []domain.Exercise{
+		{
+			ID:          "ex1",
+			Name:        "Squat",
+			MuscleGroup: "legs",
+			Category:    "strength",
+		},
+	}
+
+	data, err := json.Marshal(expectedExercises)
+	require.NoError(t, err)
+
+	err = redisClient.Set(
+		ctx,
+		testExercisesCacheKey,
+		data,
+		10*time.Minute,
+	).Err()
+	require.NoError(t, err)
+
+	result, err := svc.ListExercises(ctx)
+
+	require.NoError(t, err)
+	assert.Equal(t, expectedExercises, result)
+
+	mockRepo.AssertNotCalled(t, "ListExercises", mock.Anything)
+}
+
+func TestListExercises_CacheMiss(t *testing.T) {
+	ctx := context.Background()
+
+	mockRepo := new(MockWorkoutRepo)
+	redisClient := newTestRedis(t)
+
+	svc := service.NewWorkoutService(
+		mockRepo,
+		service.WithRedis(redisClient, 10*time.Minute),
+	)
+
+	expectedExercises := []domain.Exercise{
+		{
+			ID:          "ex1",
+			Name:        "Squat",
+			MuscleGroup: "legs",
+			Category:    "strength",
+		},
+	}
+
+	mockRepo.
+		On("ListExercises", mock.Anything).
+		Return(expectedExercises, nil).
+		Once()
+
+	result, err := svc.ListExercises(ctx)
+
+	require.NoError(t, err)
+	assert.Equal(t, expectedExercises, result)
+
+	cached, err := redisClient.Get(
+		ctx,
+		testExercisesCacheKey,
+	).Bytes()
+	require.NoError(t, err)
+
+	var cachedExercises []domain.Exercise
+
+	err = json.Unmarshal(cached, &cachedExercises)
+	require.NoError(t, err)
+
+	assert.Equal(t, expectedExercises, cachedExercises)
+
+	mockRepo.AssertExpectations(t)
+}
+
+func TestCreateExercise_InvalidatesCache(t *testing.T) {
+	ctx := context.Background()
+
+	mockRepo := new(MockWorkoutRepo)
+	redisClient := newTestRedis(t)
+
+	svc := service.NewWorkoutService(
+		mockRepo,
+		service.WithRedis(redisClient, 10*time.Minute),
+	)
+
+	err := redisClient.Set(
+		ctx,
+		testExercisesCacheKey,
+		`[{"name":"Old exercise"}]`,
+		10*time.Minute,
+	).Err()
+	require.NoError(t, err)
+
+	exercise := &domain.Exercise{
+		Name:        "Deadlift",
+		MuscleGroup: "back",
+		Category:    "strength",
+	}
+
+	mockRepo.
+		On("CreateExercise", mock.Anything, exercise).
+		Return(nil).
+		Once()
+
+	err = svc.CreateExercise(ctx, exercise)
+	require.NoError(t, err)
+
+	exists, err := redisClient.Exists(
+		ctx,
+		testExercisesCacheKey,
+	).Result()
+	require.NoError(t, err)
+
+	assert.Equal(t, int64(0), exists)
+
 	mockRepo.AssertExpectations(t)
 }

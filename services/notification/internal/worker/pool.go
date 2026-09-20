@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"fitness-platform/pkg/logger"
@@ -18,6 +19,8 @@ type Pool struct {
 	wg      sync.WaitGroup
 	ctx     context.Context
 	cancel  context.CancelFunc
+
+	stopped atomic.Bool
 }
 
 // NewPool создаёт новый пул.
@@ -47,6 +50,10 @@ func (p *Pool) Start() {
 // Submit добавляет задачу в канал.
 // Возвращает true, если задача была принята, и false, если пул остановлен.
 func (p *Pool) Submit(task domain.NotificationTask) bool {
+	if p.stopped.Load() {
+		return false
+	}
+
 	select {
 	case <-p.ctx.Done():
 		return false
@@ -57,8 +64,9 @@ func (p *Pool) Submit(task domain.NotificationTask) bool {
 
 // Shutdown останавливает пул и ожидает завершения воркеров.
 func (p *Pool) Shutdown(ctx context.Context) error {
-	p.cancel()
-	close(p.taskCh)
+	if p.stopped.CompareAndSwap(false, true) {
+		p.cancel()
+	}
 
 	done := make(chan struct{})
 	go func() {

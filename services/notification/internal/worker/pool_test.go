@@ -52,18 +52,35 @@ func TestPool_SubmitAndProcess(t *testing.T) {
 
 func TestPool_ShutdownWhenFull(t *testing.T) {
 	mockSender := new(MockSender)
+
+	mockSender.On(
+		"Send",
+		mock.Anything,
+		"u",
+		"m",
+	).Return(nil).Maybe()
+
 	ctx := context.Background()
 	pool := worker.NewPool(ctx, mockSender, 1, 1)
 	pool.Start()
 
-	ok := pool.Submit(domain.NotificationTask{UserID: "u", Type: "t", Message: "m"})
+	ok := pool.Submit(domain.NotificationTask{
+		UserID:  "u",
+		Type:    "t",
+		Message: "m",
+	})
 	assert.True(t, ok)
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
+
 	err := pool.Shutdown(shutdownCtx)
 	assert.NoError(t, err)
 
-	ok = pool.Submit(domain.NotificationTask{UserID: "u2", Type: "t2", Message: "m2"})
+	ok = pool.Submit(domain.NotificationTask{
+		UserID:  "u2",
+		Type:    "t2",
+		Message: "m2",
+	})
 	assert.False(t, ok)
 }

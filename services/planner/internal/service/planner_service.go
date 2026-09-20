@@ -214,7 +214,7 @@ func (s *PlannerService) GenerateAndSavePlan(ctx context.Context, userID string,
 		return nil, err
 	}
 	if profile == nil {
-		return nil, ErrInvalidInput // или ErrProfileNotFound, но для простоты так
+		return nil, ErrInvalidInput
 	}
 	generator := NewPlanGenerator(s.repo)
 	plan, weeks, days, exercises, err := generator.GeneratePlan(ctx, profile, startDate, durationWeeks)

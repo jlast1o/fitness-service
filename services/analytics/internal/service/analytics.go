@@ -121,6 +121,11 @@ func (s *AnalyticsService) ProcessWorkoutCreated(ctx context.Context, event doma
 		return err
 	}
 
+	if err := s.repo.MarkEventProcessed(ctx, event.WorkoutID); err != nil {
+		logger.Log.Error().Err(err).Str("event_id", event.WorkoutID).Msg("failed to mark event processed")
+		return err
+	}
+
 	return nil
 }
 

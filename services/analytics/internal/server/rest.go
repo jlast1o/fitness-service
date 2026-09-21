@@ -18,7 +18,12 @@ import (
 // RunREST запускает HTTP-сервер с chi роутером.
 // Принимает адрес, обработчики и секрет для JWT.
 // Возвращает функцию graceful shutdown.
-func RunREST(addr string, analyticsHandler *handler.AnalyticsHandler, jwtSecret string) (func(context.Context) error, error) {
+func RunREST(
+	addr string,
+	analyticsHandler *handler.AnalyticsHandler,
+	jwtSecret string,
+	readinessChecks ...ReadinessCheck,
+) (func(context.Context) error, error) {
 	r := chi.NewRouter()
 	r.Use(cors.New(cors.Options{
 		AllowedOrigins:   []string{"http://localhost:3000"},
@@ -31,6 +36,9 @@ func RunREST(addr string, analyticsHandler *handler.AnalyticsHandler, jwtSecret 
 	r.Use(chimiddleware.RealIP)
 	r.Use(chimiddleware.Logger)
 	r.Use(chimiddleware.Recoverer)
+
+	r.Get("/health/live", liveHandler)
+	r.Get("/health/ready", readyHandler(readinessChecks...))
 
 	// Защищённые маршруты аналитики
 	r.Group(func(r chi.Router) {

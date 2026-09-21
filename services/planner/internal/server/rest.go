@@ -16,7 +16,12 @@ import (
 )
 
 // RunREST запускает HTTP-сервер с chi роутером.
-func RunREST(addr string, plannerHandler *handler.PlannerHandler, jwtSecret string) (func(context.Context) error, error) {
+func RunREST(
+	addr string,
+	plannerHandler *handler.PlannerHandler,
+	jwtSecret string,
+	readinessChecks ...ReadinessCheck,
+) (func(context.Context) error, error) {
 	r := chi.NewRouter()
 	r.Use(cors.New(cors.Options{
 		AllowedOrigins:   []string{"http://localhost:3000"},
@@ -28,6 +33,9 @@ func RunREST(addr string, plannerHandler *handler.PlannerHandler, jwtSecret stri
 	r.Use(chimiddleware.RealIP)
 	r.Use(chimiddleware.Logger)
 	r.Use(chimiddleware.Recoverer)
+
+	r.Get("/health/live", liveHandler)
+	r.Get("/health/ready", readyHandler(readinessChecks...))
 
 	r.Get("/internal/reminders", plannerHandler.Reminders)
 

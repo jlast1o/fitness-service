@@ -56,18 +56,30 @@ func main() {
 	// 8. Создаём обработчики
 	analyticsHandler := handler.NewAnalyticsHandler(analyticsService)
 
-	// 9. Запускаем HTTP-сервер
-	httpShutdown, err := server.RunREST(fmt.Sprintf(":%s", cfg.HTTPPort), analyticsHandler, cfg.JWTSecret)
-	if err != nil {
-		logger.Log.Fatal().Err(err).Msg("Failed to start HTTP server")
-	}
-
 	// 10. Подключаемся к Redis
 	redisClient := redis.NewClient(&redis.Options{Addr: cfg.RedisAddr})
 	if err := redisClient.Ping(ctx).Err(); err != nil {
 		logger.Log.Fatal().Err(err).Msg("Failed to connect to Redis")
 	}
 	defer redisClient.Close()
+
+	// 9. Запускаем HTTP-сервер
+	httpShutdown, err := server.RunREST(
+		fmt.Sprintf(":%s", cfg.HTTPPort),
+		analyticsHandler,
+		cfg.JWTSecret,
+
+		func(ctx context.Context) error {
+			return pool.Ping(ctx)
+		},
+
+		func(ctx context.Context) error {
+			return redisClient.Ping(ctx).Err()
+		},
+	)
+	if err != nil {
+		logger.Log.Fatal().Err(err).Msg("Failed to start HTTP server")
+	}
 
 	// 11. Создаём Consumer и запускаем в фоне
 	redisConsumer := consumer.NewRedisConsumer(

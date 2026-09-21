@@ -46,16 +46,29 @@ func main() {
 	plannerService := service.NewPlannerService(plannerRepo)
 	plannerHandler := handler.NewPlannerHandler(plannerService)
 
-	httpShutdown, err := server.RunREST(fmt.Sprintf(":%s", cfg.HTTPPort), plannerHandler, cfg.JWTSecret)
-	if err != nil {
-		logger.Log.Fatal().Err(err).Msg("Failed to start HTTP server")
-	}
-
 	redisClient := redis.NewClient(&redis.Options{Addr: cfg.RedisAddr})
 	if err := redisClient.Ping(ctx).Err(); err != nil {
 		logger.Log.Fatal().Err(err).Msg("Failed to connect to Redis")
 	}
 	defer redisClient.Close()
+
+	httpShutdown, err := server.RunREST(
+		fmt.Sprintf(":%s", cfg.HTTPPort),
+		plannerHandler,
+		cfg.JWTSecret,
+
+		func(ctx context.Context) error {
+			return pool.Ping(ctx)
+		},
+
+		func(ctx context.Context) error {
+			return redisClient.Ping(ctx).Err()
+		},
+	)
+
+	if err != nil {
+		logger.Log.Fatal().Err(err).Msg("Failed to start HTTP server")
+	}
 
 	plannerConsumer := consumer.NewRedisConsumer(
 		redisClient,

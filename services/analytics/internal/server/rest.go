@@ -8,11 +8,14 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/cors"
 
 	"fitness-platform/pkg/logger"
 	"fitness-platform/pkg/middleware"
 	"fitness-platform/services/analytics/internal/handler"
+
+	appmetrics "fitness-platform/pkg/metrics"
 )
 
 // RunREST запускает HTTP-сервер с chi роутером.
@@ -25,6 +28,9 @@ func RunREST(
 	readinessChecks ...ReadinessCheck,
 ) (func(context.Context) error, error) {
 	r := chi.NewRouter()
+
+	registry, httpMetrics := appmetrics.NewServiceRegistry()
+
 	r.Use(cors.New(cors.Options{
 		AllowedOrigins:   []string{"http://localhost:3000"},
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
@@ -35,10 +41,21 @@ func RunREST(
 	r.Use(chimiddleware.RequestID)
 	r.Use(chimiddleware.RealIP)
 	r.Use(chimiddleware.Logger)
+
+	r.Use(middleware.HTTPMetrics(httpMetrics))
+
 	r.Use(chimiddleware.Recoverer)
 
 	r.Get("/health/live", liveHandler)
 	r.Get("/health/ready", readyHandler(readinessChecks...))
+
+	r.Handle(
+		"/metrics",
+		promhttp.HandlerFor(
+			registry,
+			promhttp.HandlerOpts{},
+		),
+	)
 
 	// Защищённые маршруты аналитики
 	r.Group(func(r chi.Router) {

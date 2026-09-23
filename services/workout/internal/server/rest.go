@@ -12,17 +12,35 @@ import (
 	"fitness-platform/pkg/logger"
 	"fitness-platform/pkg/middleware"
 	"fitness-platform/services/workout/internal/handler"
+
+	appmetrics "fitness-platform/pkg/metrics"
+
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 func RunREST(addr string, workoutHandler *handler.WorkoutHandler, jwtSecret string, ReadinessChecks ...ReadinessCheck) (func(context.Context) error, error) {
 	r := chi.NewRouter()
 
+	registry, httpMetrics := appmetrics.NewServiceRegistry()
+
 	r.Use(chimiddleware.RequestID)
 	r.Use(chimiddleware.RealIP)
 	r.Use(chimiddleware.Logger)
+
+	r.Use(middleware.HTTPMetrics(httpMetrics))
+
 	r.Use(chimiddleware.Recoverer)
+
 	r.Get("/health/live", liveHandler)
 	r.Get("/health/ready", readyHandler(ReadinessChecks...))
+
+	r.Handle(
+		"/metrics",
+		promhttp.HandlerFor(
+			registry,
+			promhttp.HandlerOpts{},
+		),
+	)
 
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.JWTAuth(jwtSecret))

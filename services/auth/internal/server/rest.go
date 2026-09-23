@@ -11,6 +11,11 @@ import (
 	"github.com/go-chi/chi/v5"
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/rs/cors"
+
+	appmetrics "fitness-platform/pkg/metrics"
+	appmiddleware "fitness-platform/pkg/middleware"
+
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 func RunREST(
@@ -19,6 +24,9 @@ func RunREST(
 	readinessChecks ...ReadinessCheck,
 ) (func(context.Context) error, error) {
 	r := chi.NewRouter()
+
+	registry, httpMetrics := appmetrics.NewServiceRegistry()
+
 	r.Use(cors.New(cors.Options{
 		AllowedOrigins:   []string{"http://localhost:3000"},
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
@@ -28,9 +36,19 @@ func RunREST(
 	r.Use(chimiddleware.RequestID)
 	r.Use(chimiddleware.RealIP)
 	r.Use(chimiddleware.Logger)
+	r.Use(appmiddleware.HTTPMetrics(httpMetrics))
 	r.Use(chimiddleware.Recoverer)
+
 	r.Get("/health/live", liveHandler)
 	r.Get("/health/ready", readyHandler(readinessChecks...))
+
+	r.Handle(
+		"/metrics",
+		promhttp.HandlerFor(
+			registry,
+			promhttp.HandlerOpts{},
+		),
+	)
 
 	r.Post("/auth/register", authHandler.Register)
 	r.Post("/auth/login", authHandler.Login)

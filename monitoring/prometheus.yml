@@ -7,6 +7,30 @@ scrape_configs:
     static_configs:
       - targets:
           - "prometheus:9090"
+          
+  - job_name: "services"
+    metrics_path: /metrics
+
+    static_configs:
+      - targets:
+          - "auth:8080"
+        labels:
+          service: "auth"
+
+      - targets:
+          - "workout:8081"
+        labels:
+          service: "workout"
+
+      - targets:
+          - "analytics:8082"
+        labels:
+          service: "analytics"
+
+      - targets:
+          - "planner:8083"
+        labels:
+          service: "planner"
 
   - job_name: "blackbox-live"
     metrics_path: /probe

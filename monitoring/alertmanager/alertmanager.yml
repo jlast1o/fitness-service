@@ -1,5 +1,8 @@
 global:
 
+templates:
+  - "/etc/alertmanager/templates/*.tmpl"
+
 route:
   receiver: default
 
@@ -14,20 +17,30 @@ route:
   routes:
     - matchers:
         - severity="critical"
-      receiver: critical
+      receiver: telegram-critical
 
     - matchers:
         - severity="warning"
-      receiver: warning
-
+      receiver: telegram-warning
 
 receivers:
   - name: default
 
-  - name: critical
+  - name: telegram-critical
+    telegram_configs:
+      - bot_token_file: /run/secrets/telegram_bot_token
+        chat_id_file: /run/secrets/telegram_chat_id
+        send_resolved: true
+        parse_mode: ""
+        message: '{{ template "telegram.fitness.message" . }}'
 
-  - name: warning
-
+  - name: telegram-warning
+    telegram_configs:
+      - bot_token_file: /run/secrets/telegram_bot_token
+        chat_id_file: /run/secrets/telegram_chat_id
+        send_resolved: true
+        parse_mode: ""
+        message: '{{ template "telegram.fitness.message" . }}'
 
 inhibit_rules:
   - source_matchers:

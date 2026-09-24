@@ -143,6 +143,7 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+
   notification:
     build:
       context: .
@@ -203,7 +204,11 @@ services:
     ports:
       - "9093:9093"
     volumes:
-      - ./monitoring/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    - ./monitoring/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    - ./monitoring/alertmanager/templates:/etc/alertmanager/templates:ro
+    secrets:
+      - telegram_bot_token
+      - telegram_chat_id
     command:
       - "--config.file=/etc/alertmanager/alertmanager.yml"
     restart: unless-stopped
@@ -216,3 +221,11 @@ volumes:
   redisdata:
   prometheus_data:
   grafana_data:
+
+
+secrets:
+  telegram_bot_token:
+    environment: TELEGRAM_BOT_TOKEN
+
+  telegram_chat_id:
+    environment: TELEGRAM_CHAT_ID

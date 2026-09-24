@@ -1,0 +1,20 @@
+{{ define "telegram.fitness.message" -}}
+{{ if eq .Status "firing" }}
+🚨 ALERT FIRING
+{{ else }}
+✅ ALERT RESOLVED
+{{ end }}
+
+Alert: {{ .CommonLabels.alertname }}
+Service: {{ .CommonLabels.service }}
+Severity: {{ .CommonLabels.severity }}
+
+{{ if eq .Status "firing" }}
+{{ range .Alerts }}
+{{ .Annotations.summary }}
+{{ .Annotations.description }}
+{{ end }}
+{{ else }}
+Service {{ .CommonLabels.service }} recovered from {{ .CommonLabels.alertname }}.
+{{ end }}
+{{- end }}

@@ -14,6 +14,7 @@ import (
 	"fitness-platform/pkg/config"
 	"fitness-platform/pkg/logger"
 	"fitness-platform/pkg/shutdown"
+	"fitness-platform/pkg/tracing"
 	"fitness-platform/services/workout/internal/database"
 	"fitness-platform/services/workout/internal/handler"
 	"fitness-platform/services/workout/internal/outbox"
@@ -35,6 +36,18 @@ func main() {
 	// 3. Корневой контекст
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	// 4. Инициализация трассировки
+	tracingShutdown, err := tracing.Init(
+		ctx,
+		"workout",
+		cfg.OTLPEndpoint,
+	)
+	if err != nil {
+		logger.Log.Fatal().
+			Err(err).
+			Msg("Failed to initialize tracing")
+	}
 
 	// 4. Подключение к базе данных
 	pool, err := database.NewPool(ctx, cfg.DatabaseURL)
@@ -97,10 +110,16 @@ func main() {
 	}()
 
 	// 10. Graceful shutdown
-	shutdown.Graceful(ctx, cancel, httpShutdown, func(ctx context.Context) error {
-		wg.Wait()
-		return nil
-	})
+	shutdown.Graceful(
+		ctx,
+		cancel,
+		httpShutdown,
+		func(ctx context.Context) error {
+			wg.Wait()
+			return nil
+		},
+		tracingShutdown,
+	)
 }
 
 // runMigrations применяет SQL-миграции.

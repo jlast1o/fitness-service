@@ -87,6 +87,7 @@ services:
       JWT_SECRET: "my-super-secret-key"
       HTTP_PORT: "8081"
       REDIS_ADDR: "redis:6379"
+      TRACING_OTLP_ENDPOINT: "tempo:4317"
     depends_on:
       postgres_workout:
         condition: service_healthy
@@ -213,6 +214,19 @@ services:
       - "--config.file=/etc/alertmanager/alertmanager.yml"
     restart: unless-stopped
 
+  tempo:
+    image: grafana/tempo:latest
+    command:
+      - "-config.file=/etc/tempo/tempo.yml"
+    volumes:
+      - ./monitoring/tempo/tempo.yml:/etc/tempo/tempo.yml:ro
+      - tempo_data:/data/tempo
+    ports:
+      - "3200:3200"
+      - "4317:4317"
+      - "4318:4318"
+    restart: unless-stopped
+
 volumes:
   pgdata_auth:
   pgdata_workout:
@@ -221,6 +235,7 @@ volumes:
   redisdata:
   prometheus_data:
   grafana_data:
+  tempo_data:
 
 
 secrets:

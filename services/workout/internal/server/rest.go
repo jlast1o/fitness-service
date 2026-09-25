@@ -25,6 +25,9 @@ func RunREST(addr string, workoutHandler *handler.WorkoutHandler, jwtSecret stri
 
 	r.Use(chimiddleware.RequestID)
 	r.Use(chimiddleware.RealIP)
+
+	r.Use(middleware.HTTPTracing("workout"))
+
 	r.Use(chimiddleware.Logger)
 
 	r.Use(middleware.HTTPMetrics(httpMetrics))

@@ -17,6 +17,8 @@ type Config struct {
 
 	RedisAddr        string        `envconfig:"REDIS_ADDR" default:"localhost:6379"`
 	ExerciseCacheTTL time.Duration `envconfig:"EXERCISE_CACHE_TTL" default:"10m"`
+
+	OTLPEndpoint string `envconfig:"TRACING_OTLP_ENDPOINT" default:"localhost:4317"`
 }
 
 func Load() (*Config, error) {

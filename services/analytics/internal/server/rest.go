@@ -40,6 +40,8 @@ func RunREST(
 	// Базовые middleware для всех маршрутов
 	r.Use(chimiddleware.RequestID)
 	r.Use(chimiddleware.RealIP)
+	r.Use(middleware.HTTPTracing("analytics"))
+
 	r.Use(chimiddleware.Logger)
 
 	r.Use(middleware.HTTPMetrics(httpMetrics))

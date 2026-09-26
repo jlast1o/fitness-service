@@ -38,6 +38,9 @@ func RunREST(
 	}).Handler)
 	r.Use(chimiddleware.RequestID)
 	r.Use(chimiddleware.RealIP)
+
+	r.Use(middleware.HTTPTracing("planner"))
+
 	r.Use(chimiddleware.Logger)
 
 	r.Use(middleware.HTTPMetrics(httpMetrics))

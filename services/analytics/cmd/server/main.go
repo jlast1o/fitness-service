@@ -13,6 +13,7 @@ import (
 	"fitness-platform/pkg/config"
 	"fitness-platform/pkg/logger"
 	"fitness-platform/pkg/shutdown"
+	"fitness-platform/pkg/tracing"
 	"fitness-platform/services/analytics/internal/consumer"
 	"fitness-platform/services/analytics/internal/database"
 	"fitness-platform/services/analytics/internal/handler"
@@ -34,6 +35,17 @@ func main() {
 	// 3. Корневой контекст
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	tracingShutdown, err := tracing.Init(
+		ctx,
+		"analytics",
+		cfg.OTLPEndpoint,
+	)
+	if err != nil {
+		logger.Log.Fatal().
+			Err(err).
+			Msg("Failed to initialize tracing")
+	}
 
 	// 4. Подключение к базе данных
 	pool, err := database.NewPool(ctx, cfg.DatabaseURL)
@@ -104,6 +116,7 @@ func main() {
 			wg.Wait()
 			return nil
 		},
+		tracingShutdown,
 	)
 }
 

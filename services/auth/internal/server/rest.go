@@ -35,6 +35,8 @@ func RunREST(
 	}).Handler)
 	r.Use(chimiddleware.RequestID)
 	r.Use(chimiddleware.RealIP)
+
+	r.Use(appmiddleware.HTTPTracing("auth"))
 	r.Use(chimiddleware.Logger)
 	r.Use(appmiddleware.HTTPMetrics(httpMetrics))
 	r.Use(chimiddleware.Recoverer)

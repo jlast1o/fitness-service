@@ -11,6 +11,10 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
+// HTTPTracing — middleware для трассировки HTTP-запросов с использованием OpenTelemetry.
+// Он использует otelhttp.NewMiddleware для создания middleware, который автоматически создает спаны для входящих HTTP-запросов.
+// Middleware фильтрует запросы, исключая /metrics и /health/*, чтобы не создавать спаны для этих эндпоинтов.
+// Для каждого запроса middleware извлекает маршрут из контекста chi и устанавливает его в качестве имени спана и атрибута http.route.
 func HTTPTracing(serviceName string) func(http.Handler) http.Handler {
 	otelMiddleware := otelhttp.NewMiddleware(
 		serviceName+".http",

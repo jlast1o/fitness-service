@@ -72,6 +72,7 @@ services:
       HTTP_PORT: "8080"
       JWT_ACCESS_TTL: "15m"
       JWT_REFRESH_TTL: "72h"
+      TRACING_OTLP_ENDPOINT: "tempo:4317"
     depends_on:
       postgres_auth:
         condition: service_healthy
@@ -106,6 +107,7 @@ services:
       JWT_SECRET: "my-super-secret-key"
       HTTP_PORT: "8082"
       REDIS_ADDR: "redis:6379"
+      TRACING_OTLP_ENDPOINT: "tempo:4317"
     depends_on:
       postgres_analytics:
         condition: service_healthy
@@ -139,6 +141,7 @@ services:
       JWT_SECRET: "my-super-secret-key"
       HTTP_PORT: "8083"
       REDIS_ADDR: "redis:6379"
+      TRACING_OTLP_ENDPOINT: "tempo:4317"
     depends_on:
       postgres_planner:
         condition: service_healthy
@@ -221,11 +224,26 @@ services:
     volumes:
       - ./monitoring/tempo/tempo.yml:/etc/tempo/tempo.yml:ro
       - tempo_data:/data/tempo
+    depends_on:
+      tempo-init:
+        condition: service_completed_successfully
     ports:
       - "3200:3200"
       - "4317:4317"
       - "4318:4318"
     restart: unless-stopped
+    
+  
+  tempo-init:
+      image: alpine:3.19
+      user: "0:0"
+      command:
+        - "sh"
+        - "-c"
+        - "mkdir -p /data/tempo/wal /data/tempo/blocks && chown -R 10001:10001 /data/tempo"
+      volumes:
+        - tempo_data:/data/tempo
+      restart: "no"
 
 volumes:
   pgdata_auth:

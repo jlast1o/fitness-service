@@ -5,6 +5,7 @@ import (
 	"fitness-platform/pkg/config"
 	"fitness-platform/pkg/logger"
 	"fitness-platform/pkg/shutdown"
+	"fitness-platform/pkg/tracing"
 	"fitness-platform/services/auth/internal/database"
 	"fitness-platform/services/auth/internal/handler"
 	"fitness-platform/services/auth/internal/repository/postgres"
@@ -27,6 +28,17 @@ func main() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	tracingShutdown, err := tracing.Init(
+		ctx,
+		"auth",
+		cfg.OTLPEndpoint,
+	)
+	if err != nil {
+		logger.Log.Fatal().
+			Err(err).
+			Msg("Failed to initialize tracing")
+	}
 
 	pool, err := database.NewPool(ctx, cfg.DatabaseURL)
 	if err != nil {
@@ -56,7 +68,12 @@ func main() {
 		logger.Log.Fatal().Err(err).Msg("Failed to start HTTP server")
 	}
 
-	shutdown.Graceful(ctx, cancel, httpShutdown)
+	shutdown.Graceful(
+		ctx,
+		cancel,
+		httpShutdown,
+		tracingShutdown,
+	)
 }
 
 func runMigrations(databaseURL string) error {

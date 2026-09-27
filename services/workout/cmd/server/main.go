@@ -9,6 +9,7 @@ import (
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
+	"github.com/redis/go-redis/extra/redisotel/v9"
 	"github.com/redis/go-redis/v9"
 
 	"fitness-platform/pkg/config"
@@ -67,6 +68,12 @@ func main() {
 	redisClient := redis.NewClient(&redis.Options{
 		Addr: cfg.RedisAddr,
 	})
+
+	if err := redisotel.InstrumentTracing(redisClient); err != nil {
+		logger.Log.Fatal().
+			Err(err).
+			Msg("Failed to initialize Redis tracing")
+	}
 	if err := redisClient.Ping(ctx).Err(); err != nil {
 		logger.Log.Fatal().Err(err).Msg("failed to ping redis")
 	}

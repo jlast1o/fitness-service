@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/trace"
 
 	"fitness-platform/pkg/logger"
 	"fitness-platform/services/workout/internal/domain"
@@ -26,6 +28,7 @@ type WorkoutService struct {
 	repo             repository.WorkoutRepository
 	redisClient      redis.Cmdable
 	exerciseCacheTTL time.Duration
+	tracer           trace.Tracer
 }
 
 type Option func(*WorkoutService)
@@ -39,7 +42,8 @@ func WithRedis(client redis.Cmdable, cacheTTL time.Duration) Option {
 
 func NewWorkoutService(repo repository.WorkoutRepository, opts ...Option) *WorkoutService {
 	s := &WorkoutService{
-		repo: repo,
+		repo:   repo,
+		tracer: otel.Tracer("workout.service"),
 	}
 
 	for _, opt := range opts {
@@ -50,6 +54,9 @@ func NewWorkoutService(repo repository.WorkoutRepository, opts ...Option) *Worko
 }
 
 func (s *WorkoutService) CreateWorkout(ctx context.Context, userID string, name string, date time.Time, notes string, sets []domain.ExerciseSet) (*domain.Workout, error) {
+	ctx, span := s.tracer.Start(ctx, "WorkoutService.CreateWorkout")
+	defer span.End()
+
 	if userID == "" || name == "" || len(sets) == 0 {
 		return nil, ErrInvalidWorkoutData
 	}
@@ -90,6 +97,9 @@ func (s *WorkoutService) CreateWorkout(ctx context.Context, userID string, name 
 }
 
 func (s *WorkoutService) GetWorkout(ctx context.Context, userID, workoutID string) (*domain.Workout, []domain.ExerciseSet, error) {
+	ctx, span := s.tracer.Start(ctx, "WorkoutService.GetWorkout")
+	defer span.End()
+
 	if workoutID == "" || userID == "" {
 		return nil, nil, ErrInvalidWorkoutData
 	}
@@ -108,6 +118,9 @@ func (s *WorkoutService) GetWorkout(ctx context.Context, userID, workoutID strin
 }
 
 func (s *WorkoutService) ListWorkouts(ctx context.Context, userID string, limit, offset int) ([]domain.Workout, error) {
+	ctx, span := s.tracer.Start(ctx, "WorkoutService.ListWorkouts")
+	defer span.End()
+
 	if userID == "" {
 		return nil, ErrInvalidWorkoutData
 	}
@@ -126,6 +139,9 @@ func (s *WorkoutService) ListWorkouts(ctx context.Context, userID string, limit,
 }
 
 func (s *WorkoutService) DeleteWorkout(ctx context.Context, userID, workoutID string) error {
+	ctx, span := s.tracer.Start(ctx, "WorkoutService.DeleteWorkout")
+	defer span.End()
+
 	if workoutID == "" || userID == "" {
 		return ErrInvalidWorkoutData
 	}
@@ -146,6 +162,9 @@ func (s *WorkoutService) DeleteWorkout(ctx context.Context, userID, workoutID st
 }
 
 func (s *WorkoutService) UpdateWorkout(ctx context.Context, userID string, workout *domain.Workout) error {
+	ctx, span := s.tracer.Start(ctx, "WorkoutService.UpdateWorkout")
+	defer span.End()
+
 	if workout == nil || workout.ID == "" || userID == "" {
 		return ErrInvalidWorkoutData
 	}
@@ -170,6 +189,9 @@ func (s *WorkoutService) UpdateWorkout(ctx context.Context, userID string, worko
 }
 
 func (s *WorkoutService) ListExercises(ctx context.Context) ([]domain.Exercise, error) {
+	ctx, span := s.tracer.Start(ctx, "WorkoutService.ListExercises")
+	defer span.End()
+
 	if s.redisClient != nil {
 		cached, err := s.redisClient.Get(ctx, exercisesCacheKey).Bytes()
 
@@ -217,6 +239,9 @@ func (s *WorkoutService) ListExercises(ctx context.Context) ([]domain.Exercise, 
 }
 
 func (s *WorkoutService) CreateExercise(ctx context.Context, exercise *domain.Exercise) error {
+	ctx, span := s.tracer.Start(ctx, "WorkoutService.CreateExercise")
+	defer span.End()
+
 	if exercise == nil || exercise.Name == "" || exercise.MuscleGroup == "" {
 		return ErrInvalidWorkoutData
 	}

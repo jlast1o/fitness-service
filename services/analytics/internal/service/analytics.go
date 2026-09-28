@@ -7,20 +7,29 @@ import (
 	"fitness-platform/pkg/logger"
 	"fitness-platform/services/analytics/internal/domain"
 	"fitness-platform/services/analytics/internal/repository"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // AnalyticsService содержит бизнес-логику аналитики.
 type AnalyticsService struct {
-	repo repository.AnalyticsRepository
+	repo   repository.AnalyticsRepository
+	tracer trace.Tracer
 }
 
 // NewAnalyticsService создаёт новый экземпляр AnalyticsService.
 func NewAnalyticsService(repo repository.AnalyticsRepository) *AnalyticsService {
-	return &AnalyticsService{repo: repo}
+	return &AnalyticsService{repo: repo, tracer: otel.Tracer("analytics.service")}
 }
 
 // ProcessWorkoutCreated обрабатывает событие о новой тренировке.
 func (s *AnalyticsService) ProcessWorkoutCreated(ctx context.Context, event domain.WorkoutCreatedEvent) error {
+	ctx, span := s.tracer.Start(
+		ctx,
+		"AnalyticsService.ProcessWorkoutCreated",
+	)
+	defer span.End()
 	// 1. Считаем общий объём и агрегируем по упражнениям
 	// Проверяем, не обработано ли уже это событие
 	processed, err := s.repo.IsEventProcessed(ctx, event.WorkoutID)
@@ -142,20 +151,32 @@ func calculate1RM(weight float64, reps int) float64 {
 
 // GetUserStats возвращает агрегированную статистику пользователя.
 func (s *AnalyticsService) GetUserStats(ctx context.Context, userID string) (*domain.UserStats, error) {
+	ctx, span := s.tracer.Start(ctx, "AnalyticsService.GetUserStats")
+	defer span.End()
+
 	return s.repo.GetUserStats(ctx, userID)
 }
 
 // GetExerciseProgress возвращает прогресс по конкретному упражнению.
 func (s *AnalyticsService) GetExerciseProgress(ctx context.Context, userID, exerciseID string) (*domain.ExerciseProgress, error) {
+	ctx, span := s.tracer.Start(ctx, "AnalyticsService.GetExerciseProgress")
+	defer span.End()
+
 	return s.repo.GetExerciseProgress(ctx, userID, exerciseID)
 }
 
 // ListExerciseProgress возвращает прогресс по всем упражнениям пользователя.
 func (s *AnalyticsService) ListExerciseProgress(ctx context.Context, userID string) ([]domain.ExerciseProgress, error) {
+	ctx, span := s.tracer.Start(ctx, "AnalyticsService.ListExerciseProgress")
+	defer span.End()
+
 	return s.repo.ListExerciseProgress(ctx, userID)
 }
 
 // ListWorkoutSummaries возвращает список сводок тренировок.
 func (s *AnalyticsService) ListWorkoutSummaries(ctx context.Context, userID string, limit, offset int) ([]domain.WorkoutSummary, error) {
+	ctx, span := s.tracer.Start(ctx, "AnalyticsService.ListWorkoutSummaries")
+	defer span.End()
+
 	return s.repo.ListWorkoutSummaries(ctx, userID, limit, offset)
 }

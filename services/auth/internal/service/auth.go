@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -22,13 +24,28 @@ type AuthService struct {
 	jwtSecret  []byte
 	accessTTL  time.Duration
 	refreshTTL time.Duration
+	tracer     trace.Tracer
 }
 
-func NewAuthService(repo repository.UserRepository, secret string, accessTTL, refreshTTL time.Duration) *AuthService {
-	return &AuthService{repo: repo, jwtSecret: []byte(secret), accessTTL: accessTTL, refreshTTL: refreshTTL}
+func NewAuthService(
+	repo repository.UserRepository,
+	secret string,
+	accessTTL,
+	refreshTTL time.Duration,
+) *AuthService {
+	return &AuthService{
+		repo:       repo,
+		jwtSecret:  []byte(secret),
+		accessTTL:  accessTTL,
+		refreshTTL: refreshTTL,
+		tracer:     otel.Tracer("auth.service"),
+	}
 }
 
 func (s *AuthService) Register(ctx context.Context, email, password string) (string, error) {
+	ctx, span := s.tracer.Start(ctx, "AuthService.Register")
+	defer span.End()
+
 	if email == "" || password == "" {
 		return "", ErrEmailPassRequired
 	}
@@ -53,6 +70,9 @@ func (s *AuthService) Register(ctx context.Context, email, password string) (str
 }
 
 func (s *AuthService) Login(ctx context.Context, email, password string) (string, string, error) {
+	ctx, span := s.tracer.Start(ctx, "AuthService.Login")
+	defer span.End()
+
 	if email == "" || password == "" {
 		return "", "", ErrEmailPassRequired
 	}

@@ -8,6 +8,9 @@ import (
 	"fitness-platform/pkg/logger"
 	"fitness-platform/services/planner/internal/domain"
 	"fitness-platform/services/planner/internal/repository"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // Специфические ошибки бизнес-логики.
@@ -17,16 +20,25 @@ var (
 
 // PlannerService содержит бизнес-логику планировщика.
 type PlannerService struct {
-	repo repository.PlannerRepository
+	repo   repository.PlannerRepository
+	tracer trace.Tracer
 }
 
 // NewPlannerService создаёт новый экземпляр PlannerService.
 func NewPlannerService(repo repository.PlannerRepository) *PlannerService {
-	return &PlannerService{repo: repo}
+	return &PlannerService{
+		repo:   repo,
+		tracer: otel.Tracer("planner.service")}
 }
 
 // UpsertProfile создаёт или обновляет тренировочный профиль пользователя.
 func (s *PlannerService) UpsertProfile(ctx context.Context, profile *domain.UserProfile) error {
+	ctx, span := s.tracer.Start(
+		ctx,
+		"PlannerService.UpsertProfile",
+	)
+	defer span.End()
+
 	// Валидация
 	if profile.UserID == "" || profile.Goal == "" || profile.ExperienceLevel == "" {
 		return ErrInvalidInput
@@ -58,6 +70,12 @@ func (s *PlannerService) UpsertProfile(ctx context.Context, profile *domain.User
 
 // GetProfile возвращает профиль пользователя.
 func (s *PlannerService) GetProfile(ctx context.Context, userID string) (*domain.UserProfile, error) {
+	ctx, span := s.tracer.Start(
+		ctx,
+		"PlannerService.GetProfile",
+	)
+	defer span.End()
+
 	if userID == "" {
 		return nil, ErrInvalidInput
 	}
@@ -71,6 +89,12 @@ func (s *PlannerService) GetProfile(ctx context.Context, userID string) (*domain
 
 // ListExercises возвращает все доступные упражнения.
 func (s *PlannerService) ListExercises(ctx context.Context) ([]domain.AvailableExercise, error) {
+	ctx, span := s.tracer.Start(
+		ctx,
+		"PlannerService.ListExercises",
+	)
+	defer span.End()
+
 	exercises, err := s.repo.ListAvailableExercises(ctx)
 	if err != nil {
 		logger.Log.Error().Err(err).Msg("failed to list exercises")
@@ -81,6 +105,12 @@ func (s *PlannerService) ListExercises(ctx context.Context) ([]domain.AvailableE
 
 // GetExercise возвращает упражнение по ID.
 func (s *PlannerService) GetExercise(ctx context.Context, exerciseID string) (*domain.AvailableExercise, error) {
+	ctx, span := s.tracer.Start(
+		ctx,
+		"PlannerService.GetExercise",
+	)
+	defer span.End()
+
 	if exerciseID == "" {
 		return nil, ErrInvalidInput
 	}
@@ -95,6 +125,12 @@ func (s *PlannerService) GetExercise(ctx context.Context, exerciseID string) (*d
 // ProcessWorkoutCreated обрабатывает событие о выполненной тренировке.
 // Адаптирует план на основе фактических RPE и весов.
 func (s *PlannerService) ProcessWorkoutCreated(ctx context.Context, event domain.WorkoutCreatedEvent) error {
+	ctx, span := s.tracer.Start(
+		ctx,
+		"PlannerService.ProcessWorkoutCreated",
+	)
+	defer span.End()
+
 	// 1. Найти активный план пользователя
 	plan, err := s.repo.GetActivePlanByUserID(ctx, event.UserID)
 	if err != nil {
@@ -196,6 +232,12 @@ func average(values []float64) float64 {
 
 // CreatePlan сохраняет готовый план и его компоненты.
 func (s *PlannerService) CreatePlan(ctx context.Context, plan *domain.TrainingPlan, weeks []domain.PlanWeek, days []domain.PlanDay, exercises []domain.PlannedExercise) error {
+	ctx, span := s.tracer.Start(
+		ctx,
+		"PlannerService.CreatePlan",
+	)
+	defer span.End()
+
 	if plan == nil || plan.UserID == "" {
 		return ErrInvalidInput
 	}
@@ -205,6 +247,12 @@ func (s *PlannerService) CreatePlan(ctx context.Context, plan *domain.TrainingPl
 // GenerateAndSavePlan генерирует план на основе профиля пользователя и сохраняет его.
 // Возвращает созданный план.
 func (s *PlannerService) GenerateAndSavePlan(ctx context.Context, userID string, startDate time.Time, durationWeeks int) (*domain.TrainingPlan, error) {
+	ctx, span := s.tracer.Start(
+		ctx,
+		"PlannerService.GenerateAndSavePlan",
+	)
+	defer span.End()
+
 	if userID == "" {
 		return nil, ErrInvalidInput
 	}
@@ -238,6 +286,12 @@ func (s *PlannerService) GenerateAndSavePlan(ctx context.Context, userID string,
 
 // GetActivePlan возвращает активный план пользователя.
 func (s *PlannerService) GetActivePlan(ctx context.Context, userID string) (*domain.TrainingPlan, error) {
+	ctx, span := s.tracer.Start(
+		ctx,
+		"PlannerService.GetActivePlan",
+	)
+	defer span.End()
+
 	if userID == "" {
 		return nil, ErrInvalidInput
 	}
@@ -251,6 +305,12 @@ func (s *PlannerService) GetActivePlan(ctx context.Context, userID string) (*dom
 
 // GetNextWorkout возвращает ближайший запланированный день и его упражнения.
 func (s *PlannerService) GetNextWorkout(ctx context.Context, userID string) (*domain.PlanDay, []domain.PlannedExercise, error) {
+	ctx, span := s.tracer.Start(
+		ctx,
+		"PlannerService.GetNextWorkout",
+	)
+	defer span.End()
+
 	if userID == "" {
 		return nil, nil, ErrInvalidInput
 	}
@@ -264,6 +324,12 @@ func (s *PlannerService) GetNextWorkout(ctx context.Context, userID string) (*do
 
 // GetUpcomingWorkouts возвращает предстоящие тренировки для напоминаний.
 func (s *PlannerService) GetUpcomingWorkouts(ctx context.Context, from, to time.Time) ([]domain.WorkoutReminder, error) {
+	ctx, span := s.tracer.Start(
+		ctx,
+		"PlannerService.GetUpcomingWorkouts",
+	)
+	defer span.End()
+
 	if from.After(to) {
 		return nil, ErrInvalidInput
 	}

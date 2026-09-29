@@ -77,7 +77,7 @@ func (h *WorkoutHandler) CreateWorkout(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, service.ErrExerciseNotFound):
 			writeError(w, http.StatusNotFound, err.Error())
 		default:
-			logger.Log.Error().Err(err).Msg("failed to create workout")
+			logger.FromContext(r.Context()).Error().Err(err).Msg("failed to create workout")
 			writeError(w, http.StatusInternalServerError, "internal server error")
 		}
 		return
@@ -103,7 +103,7 @@ func (h *WorkoutHandler) GetWorkout(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, service.ErrInvalidWorkoutData):
 			writeError(w, http.StatusBadRequest, err.Error())
 		default:
-			logger.Log.Error().Err(err).Msg("failed to get workout")
+			logger.FromContext(r.Context()).Error().Err(err).Msg("failed to get workout")
 			writeError(w, http.StatusInternalServerError, "internal server error")
 		}
 		return
@@ -133,7 +133,7 @@ func (h *WorkoutHandler) ListWorkouts(w http.ResponseWriter, r *http.Request) {
 
 	workouts, err := h.workoutService.ListWorkouts(r.Context(), userID, limit, offset)
 	if err != nil {
-		logger.Log.Error().Err(err).Msg("failed to list workouts")
+		logger.FromContext(r.Context()).Error().Err(err).Msg("failed to list workouts")
 		writeError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
@@ -157,7 +157,7 @@ func (h *WorkoutHandler) DeleteWorkout(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, service.ErrInvalidWorkoutData):
 			writeError(w, http.StatusBadRequest, err.Error())
 		default:
-			logger.Log.Error().Err(err).Msg("failed to delete workout")
+			logger.FromContext(r.Context()).Error().Err(err).Msg("failed to delete workout")
 			writeError(w, http.StatusInternalServerError, "internal server error")
 		}
 		return

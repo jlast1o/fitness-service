@@ -64,7 +64,7 @@ func (s *WorkoutService) CreateWorkout(ctx context.Context, userID string, name 
 	for _, set := range sets {
 		ex, err := s.repo.GetExerciseByID(ctx, set.ExerciseID)
 		if err != nil {
-			logger.Log.Error().Err(err).Str("exercise_id", set.ExerciseID).Msg("failed to get exercise")
+			logger.FromContext(ctx).Error().Err(err).Str("exercise_id", set.ExerciseID).Msg("failed to get exercise")
 			return nil, err
 		}
 		if ex == nil {
@@ -89,7 +89,7 @@ func (s *WorkoutService) CreateWorkout(ctx context.Context, userID string, name 
 
 	err := s.repo.CreateWorkout(ctx, workout, sets)
 	if err != nil {
-		logger.Log.Error().Err(err).Msg("failed to create workout")
+		logger.FromContext(ctx).Error().Err(err).Msg("failed to create workout")
 		return nil, err
 	}
 
@@ -105,7 +105,7 @@ func (s *WorkoutService) GetWorkout(ctx context.Context, userID, workoutID strin
 	}
 	workout, sets, err := s.repo.GetWorkoutByID(ctx, workoutID)
 	if err != nil {
-		logger.Log.Error().Err(err).Msg("failed to get workout")
+		logger.FromContext(ctx).Error().Err(err).Msg("failed to get workout")
 		return nil, nil, err
 	}
 	if workout == nil {
@@ -132,7 +132,7 @@ func (s *WorkoutService) ListWorkouts(ctx context.Context, userID string, limit,
 	}
 	workouts, err := s.repo.ListWorkoutsByUser(ctx, userID, limit, offset)
 	if err != nil {
-		logger.Log.Error().Err(err).Msg("failed to list workouts")
+		logger.FromContext(ctx).Error().Err(err).Msg("failed to list workouts")
 		return nil, err
 	}
 	return workouts, nil
@@ -147,7 +147,7 @@ func (s *WorkoutService) DeleteWorkout(ctx context.Context, userID, workoutID st
 	}
 	workout, _, err := s.repo.GetWorkoutByID(ctx, workoutID)
 	if err != nil {
-		logger.Log.Error().Err(err).Msg("failed to get workout for deletion")
+		logger.FromContext(ctx).Error().Err(err).Msg("failed to get workout for deletion")
 		return err
 	}
 
@@ -171,7 +171,7 @@ func (s *WorkoutService) UpdateWorkout(ctx context.Context, userID string, worko
 
 	existing, _, err := s.repo.GetWorkoutByID(ctx, workout.ID)
 	if err != nil {
-		logger.Log.Error().Err(err).Msg("failed to get workout to update")
+		logger.FromContext(ctx).Error().Err(err).Msg("failed to get workout to update")
 		return err
 	}
 
@@ -201,12 +201,12 @@ func (s *WorkoutService) ListExercises(ctx context.Context) ([]domain.Exercise, 
 			if err := json.Unmarshal(cached, &exercises); err == nil {
 				return exercises, nil
 			} else {
-				logger.Log.Warn().
+				logger.FromContext(ctx).Warn().
 					Err(err).
 					Msg("failed to unmarshal exercises cache")
 			}
 		} else if !errors.Is(err, redis.Nil) {
-			logger.Log.Warn().
+			logger.FromContext(ctx).Warn().
 				Err(err).
 				Msg("failed to read exercises cache")
 		}
@@ -220,7 +220,7 @@ func (s *WorkoutService) ListExercises(ctx context.Context) ([]domain.Exercise, 
 	if s.redisClient != nil {
 		data, err := json.Marshal(exercises)
 		if err != nil {
-			logger.Log.Warn().
+			logger.FromContext(ctx).Warn().
 				Err(err).
 				Msg("failed to marshal exercise cache")
 		} else if err := s.redisClient.Set(
@@ -229,7 +229,7 @@ func (s *WorkoutService) ListExercises(ctx context.Context) ([]domain.Exercise, 
 			data,
 			s.exerciseCacheTTL,
 		).Err(); err != nil {
-			logger.Log.Warn().
+			logger.FromContext(ctx).Warn().
 				Err(err).
 				Msg("failed to write exercises cache")
 		}
@@ -252,7 +252,7 @@ func (s *WorkoutService) CreateExercise(ctx context.Context, exercise *domain.Ex
 
 	if s.redisClient != nil {
 		if err := s.redisClient.Del(ctx, exercisesCacheKey).Err(); err != nil {
-			logger.Log.Warn().
+			logger.FromContext(ctx).Warn().
 				Err(err).
 				Msg("failed to invalidate exercises cache")
 		}

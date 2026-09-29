@@ -23,7 +23,7 @@ import (
 )
 
 func main() {
-	logger.Init("info")
+	logger.Init("planner", "info")
 
 	cfg, err := config.Load()
 	if err != nil {

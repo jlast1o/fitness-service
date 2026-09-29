@@ -60,7 +60,7 @@ func (h *PlannerHandler) UpsertProfile(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, service.ErrInvalidInput):
 			writeError(w, http.StatusBadRequest, err.Error())
 		default:
-			logger.Log.Error().Err(err).Msg("failed to upsert profile")
+			logger.FromContext(r.Context()).Error().Err(err).Msg("failed to upsert profile")
 			writeError(w, http.StatusInternalServerError, "internal server error")
 		}
 		return
@@ -79,7 +79,7 @@ func (h *PlannerHandler) GetProfile(w http.ResponseWriter, r *http.Request) {
 
 	profile, err := h.plannerService.GetProfile(r.Context(), userID)
 	if err != nil {
-		logger.Log.Error().Err(err).Msg("failed to get profile")
+		logger.FromContext(r.Context()).Error().Err(err).Msg("failed to get profile")
 		writeError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
@@ -95,7 +95,7 @@ func (h *PlannerHandler) GetProfile(w http.ResponseWriter, r *http.Request) {
 func (h *PlannerHandler) ListExercises(w http.ResponseWriter, r *http.Request) {
 	exercises, err := h.plannerService.ListExercises(r.Context())
 	if err != nil {
-		logger.Log.Error().Err(err).Msg("failed to list exercises")
+		logger.FromContext(r.Context()).Error().Err(err).Msg("failed to list exercises")
 		writeError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
@@ -137,7 +137,7 @@ func (h *PlannerHandler) GeneratePlan(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, service.ErrInvalidInput):
 			writeError(w, http.StatusBadRequest, err.Error())
 		default:
-			logger.Log.Error().Err(err).Msg("failed to generate plan")
+			logger.FromContext(r.Context()).Error().Err(err).Msg("failed to generate plan")
 			writeError(w, http.StatusInternalServerError, "failed to generate plan")
 		}
 		return
@@ -156,7 +156,7 @@ func (h *PlannerHandler) GetCurrentPlan(w http.ResponseWriter, r *http.Request) 
 
 	plan, err := h.plannerService.GetActivePlan(r.Context(), userID)
 	if err != nil {
-		logger.Log.Error().Err(err).Msg("failed to get active plan")
+		logger.FromContext(r.Context()).Error().Err(err).Msg("failed to get active plan")
 		writeError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
@@ -177,7 +177,7 @@ func (h *PlannerHandler) GetNextWorkout(w http.ResponseWriter, r *http.Request) 
 
 	day, exercises, err := h.plannerService.GetNextWorkout(r.Context(), userID)
 	if err != nil {
-		logger.Log.Error().Err(err).Msg("failed to get next workout")
+		logger.FromContext(r.Context()).Error().Err(err).Msg("failed to get next workout")
 		writeError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}

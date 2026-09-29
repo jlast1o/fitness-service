@@ -62,7 +62,7 @@ func (s *PlannerService) UpsertProfile(ctx context.Context, profile *domain.User
 	}
 
 	if err := s.repo.UpsertUserProfile(ctx, profile); err != nil {
-		logger.Log.Error().Err(err).Str("user_id", profile.UserID).Msg("failed to upsert profile")
+		logger.FromContext(ctx).Error().Err(err).Str("user_id", profile.UserID).Msg("failed to upsert profile")
 		return err
 	}
 	return nil
@@ -81,7 +81,7 @@ func (s *PlannerService) GetProfile(ctx context.Context, userID string) (*domain
 	}
 	profile, err := s.repo.GetUserProfile(ctx, userID)
 	if err != nil {
-		logger.Log.Error().Err(err).Str("user_id", userID).Msg("failed to get profile")
+		logger.FromContext(ctx).Error().Err(err).Str("user_id", userID).Msg("failed to get profile")
 		return nil, err
 	}
 	return profile, nil
@@ -97,7 +97,7 @@ func (s *PlannerService) ListExercises(ctx context.Context) ([]domain.AvailableE
 
 	exercises, err := s.repo.ListAvailableExercises(ctx)
 	if err != nil {
-		logger.Log.Error().Err(err).Msg("failed to list exercises")
+		logger.FromContext(ctx).Error().Err(err).Msg("failed to list exercises")
 		return nil, err
 	}
 	return exercises, nil
@@ -116,7 +116,7 @@ func (s *PlannerService) GetExercise(ctx context.Context, exerciseID string) (*d
 	}
 	exercise, err := s.repo.GetAvailableExerciseByID(ctx, exerciseID)
 	if err != nil {
-		logger.Log.Error().Err(err).Str("exercise_id", exerciseID).Msg("failed to get exercise")
+		logger.FromContext(ctx).Error().Err(err).Str("exercise_id", exerciseID).Msg("failed to get exercise")
 		return nil, err
 	}
 	return exercise, nil
@@ -134,7 +134,7 @@ func (s *PlannerService) ProcessWorkoutCreated(ctx context.Context, event domain
 	// 1. Найти активный план пользователя
 	plan, err := s.repo.GetActivePlanByUserID(ctx, event.UserID)
 	if err != nil {
-		logger.Log.Error().Err(err).Str("user_id", event.UserID).Msg("failed to get active plan")
+		logger.FromContext(ctx).Error().Err(err).Str("user_id", event.UserID).Msg("failed to get active plan")
 		return err
 	}
 	if plan == nil {
@@ -145,7 +145,7 @@ func (s *PlannerService) ProcessWorkoutCreated(ctx context.Context, event domain
 	// 2. Получить запланированные упражнения на дату тренировки
 	plannedExercises, err := s.repo.GetPlannedExercisesForDate(ctx, event.UserID, event.Date)
 	if err != nil {
-		logger.Log.Error().Err(err).Msg("failed to get planned exercises for date")
+		logger.FromContext(ctx).Error().Err(err).Msg("failed to get planned exercises for date")
 		return err
 	}
 	if len(plannedExercises) == 0 {
@@ -198,7 +198,7 @@ func (s *PlannerService) ProcessWorkoutCreated(ctx context.Context, event domain
 			}
 			// Обновляем запланированное упражнение
 			if err := s.repo.UpdatePlannedExercise(ctx, &planned); err != nil {
-				logger.Log.Error().Err(err).Str("exercise_id", planned.ExerciseID).Msg("failed to update planned exercise")
+				logger.FromContext(ctx).Error().Err(err).Str("exercise_id", planned.ExerciseID).Msg("failed to update planned exercise")
 				return err
 			}
 		} else {
@@ -208,7 +208,7 @@ func (s *PlannerService) ProcessWorkoutCreated(ctx context.Context, event domain
 			if planned.TargetWeight > 0 && actualAvgWeight < planned.TargetWeight*0.8 {
 				planned.TargetWeight = actualAvgWeight
 				if err := s.repo.UpdatePlannedExercise(ctx, &planned); err != nil {
-					logger.Log.Error().Err(err).Str("exercise_id", planned.ExerciseID).Msg("failed to update planned exercise weight")
+					logger.FromContext(ctx).Error().Err(err).Str("exercise_id", planned.ExerciseID).Msg("failed to update planned exercise weight")
 					return err
 				}
 			}
@@ -258,7 +258,7 @@ func (s *PlannerService) GenerateAndSavePlan(ctx context.Context, userID string,
 	}
 	profile, err := s.repo.GetUserProfile(ctx, userID)
 	if err != nil {
-		logger.Log.Error().Err(err).Str("user_id", userID).Msg("failed to get profile for plan generation")
+		logger.FromContext(ctx).Error().Err(err).Str("user_id", userID).Msg("failed to get profile for plan generation")
 		return nil, err
 	}
 	if profile == nil {
@@ -267,17 +267,17 @@ func (s *PlannerService) GenerateAndSavePlan(ctx context.Context, userID string,
 	generator := NewPlanGenerator(s.repo)
 	plan, weeks, days, exercises, err := generator.GeneratePlan(ctx, profile, startDate, durationWeeks)
 	if err != nil {
-		logger.Log.Error().Err(err).Msg("failed to generate plan")
+		logger.FromContext(ctx).Error().Err(err).Msg("failed to generate plan")
 		return nil, err
 	}
 
 	if err := s.repo.DeactivateActivePlans(ctx, userID); err != nil {
-		logger.Log.Error().Err(err).Str("user_id", userID).Msg("failed to deactivate old plans")
+		logger.FromContext(ctx).Error().Err(err).Str("user_id", userID).Msg("failed to deactivate old plans")
 		return nil, err
 	}
 
 	if err := s.repo.CreatePlan(ctx, plan, weeks, days, exercises); err != nil {
-		logger.Log.Error().Err(err).Msg("failed to save generated plan")
+		logger.FromContext(ctx).Error().Err(err).Msg("failed to save generated plan")
 		return nil, err
 	}
 
@@ -297,7 +297,7 @@ func (s *PlannerService) GetActivePlan(ctx context.Context, userID string) (*dom
 	}
 	plan, err := s.repo.GetActivePlanByUserID(ctx, userID)
 	if err != nil {
-		logger.Log.Error().Err(err).Str("user_id", userID).Msg("failed to get active plan")
+		logger.FromContext(ctx).Error().Err(err).Str("user_id", userID).Msg("failed to get active plan")
 		return nil, err
 	}
 	return plan, nil
@@ -316,7 +316,7 @@ func (s *PlannerService) GetNextWorkout(ctx context.Context, userID string) (*do
 	}
 	day, exercises, err := s.repo.GetNextPlannedDay(ctx, userID, time.Now())
 	if err != nil {
-		logger.Log.Error().Err(err).Str("user_id", userID).Msg("failed to get next workout")
+		logger.FromContext(ctx).Error().Err(err).Str("user_id", userID).Msg("failed to get next workout")
 		return nil, nil, err
 	}
 	return day, exercises, nil

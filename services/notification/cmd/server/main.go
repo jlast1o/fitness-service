@@ -17,7 +17,7 @@ import (
 
 func main() {
 	// 1. Инициализация логгера
-	logger.Init("info")
+	logger.Init("notification", "info")
 
 	// 2. Читаем конфигурацию из переменных окружения
 	redisAddr := os.Getenv("REDIS_ADDR")

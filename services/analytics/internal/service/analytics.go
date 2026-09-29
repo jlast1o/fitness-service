@@ -34,11 +34,11 @@ func (s *AnalyticsService) ProcessWorkoutCreated(ctx context.Context, event doma
 	// Проверяем, не обработано ли уже это событие
 	processed, err := s.repo.IsEventProcessed(ctx, event.WorkoutID)
 	if err != nil {
-		logger.Log.Error().Err(err).Str("event_id", event.WorkoutID).Msg("failed to check processed event")
+		logger.FromContext(ctx).Error().Err(err).Str("event_id", event.WorkoutID).Msg("failed to check processed event")
 		return err
 	}
 	if processed {
-		logger.Log.Info().Str("event_id", event.WorkoutID).Msg("event already processed, skipping")
+		logger.FromContext(ctx).Info().Str("event_id", event.WorkoutID).Msg("event already processed, skipping")
 		return nil
 	}
 
@@ -83,7 +83,7 @@ func (s *AnalyticsService) ProcessWorkoutCreated(ctx context.Context, event doma
 	// 2. Обновляем user_stats
 	stats, err := s.repo.GetUserStats(ctx, event.UserID)
 	if err != nil {
-		logger.Log.Error().Err(err).Msg("failed to get user stats")
+		logger.FromContext(ctx).Error().Err(err).Msg("failed to get user stats")
 		return err
 	}
 	if stats == nil {
@@ -96,7 +96,7 @@ func (s *AnalyticsService) ProcessWorkoutCreated(ctx context.Context, event doma
 	}
 	// Здесь упрощённо; можно хранить сумму повторений для точности, но для MVP сойдёт.
 	if err := s.repo.UpsertUserStats(ctx, stats); err != nil {
-		logger.Log.Error().Err(err).Msg("failed to upsert user stats")
+		logger.FromContext(ctx).Error().Err(err).Msg("failed to upsert user stats")
 		return err
 	}
 
@@ -111,7 +111,7 @@ func (s *AnalyticsService) ProcessWorkoutCreated(ctx context.Context, event doma
 			Estimated1RM:  agg.Max1RM,
 		}
 		if err := s.repo.UpsertExerciseProgress(ctx, progress); err != nil {
-			logger.Log.Error().Err(err).Msg("failed to upsert exercise progress")
+			logger.FromContext(ctx).Error().Err(err).Msg("failed to upsert exercise progress")
 			return err
 		}
 	}
@@ -126,12 +126,12 @@ func (s *AnalyticsService) ProcessWorkoutCreated(ctx context.Context, event doma
 		SetCount:    event.SetsCount,
 	}
 	if err := s.repo.InsertWorkoutSummary(ctx, summary); err != nil {
-		logger.Log.Error().Err(err).Msg("failed to insert workout summary")
+		logger.FromContext(ctx).Error().Err(err).Msg("failed to insert workout summary")
 		return err
 	}
 
 	if err := s.repo.MarkEventProcessed(ctx, event.WorkoutID); err != nil {
-		logger.Log.Error().Err(err).Str("event_id", event.WorkoutID).Msg("failed to mark event processed")
+		logger.FromContext(ctx).Error().Err(err).Str("event_id", event.WorkoutID).Msg("failed to mark event processed")
 		return err
 	}
 

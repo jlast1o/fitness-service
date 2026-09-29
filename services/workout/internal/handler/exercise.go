@@ -13,7 +13,7 @@ import (
 func (h *WorkoutHandler) ListExercises(w http.ResponseWriter, r *http.Request) {
 	exercises, err := h.workoutService.ListExercises(r.Context())
 	if err != nil {
-		logger.Log.Error().Err(err).Msg("failed to list exercises")
+		logger.FromContext(r.Context()).Error().Err(err).Msg("failed to list exercises")
 		writeError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
@@ -35,7 +35,7 @@ func (h *WorkoutHandler) CreateExercise(w http.ResponseWriter, r *http.Request) 
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		logger.Log.Error().Err(err).Msg("failed to create exercise")
+		logger.FromContext(r.Context()).Error().Err(err).Msg("failed to create exercise")
 		writeError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}

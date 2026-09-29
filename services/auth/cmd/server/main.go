@@ -19,7 +19,7 @@ import (
 )
 
 func main() {
-	logger.Init("info")
+	logger.Init("auth", "info")
 
 	cfg, err := config.Load()
 	if err != nil {

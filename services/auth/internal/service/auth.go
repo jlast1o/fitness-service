@@ -52,7 +52,7 @@ func (s *AuthService) Register(ctx context.Context, email, password string) (str
 
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
-		logger.Log.Error().Err(err).Msg("failed to hash password")
+		logger.FromContext(ctx).Error().Err(err).Msg("failed to hash password")
 		return "", err
 	}
 
@@ -62,7 +62,7 @@ func (s *AuthService) Register(ctx context.Context, email, password string) (str
 	}
 
 	if err := s.repo.CreateUser(ctx, user); err != nil {
-		logger.Log.Error().Err(err).Str("email", email).Msg("failed to create user")
+		logger.FromContext(ctx).Error().Err(err).Str("email", email).Msg("failed to create user")
 		return "", err
 	}
 
@@ -80,7 +80,7 @@ func (s *AuthService) Login(ctx context.Context, email, password string) (string
 	user, err := s.repo.GetUserByEmail(ctx, email)
 
 	if err != nil {
-		logger.Log.Error().Err(err).Str("email", email).Msg("failed to get user")
+		logger.FromContext(ctx).Error().Err(err).Str("email", email).Msg("failed to get user")
 		return "", "", err
 	}
 	if user == nil {
@@ -91,19 +91,19 @@ func (s *AuthService) Login(ctx context.Context, email, password string) (string
 		if errors.Is(err, bcrypt.ErrMismatchedHashAndPassword) {
 			return "", "", ErrInvalidCredentials
 		}
-		logger.Log.Error().Err(err).Str("email", email).Msg("failed to compare password and hash")
+		logger.FromContext(ctx).Error().Err(err).Str("email", email).Msg("failed to compare password and hash")
 		return "", "", err
 	}
 
 	accessToken, err := s.generateToken(user.ID, s.accessTTL)
 	if err != nil {
-		logger.Log.Error().Err(err).Msg("failed to generate access token")
+		logger.FromContext(ctx).Error().Err(err).Msg("failed to generate access token")
 		return "", "", err
 	}
 
 	refreshToken, err := s.generateToken(user.ID, s.refreshTTL)
 	if err != nil {
-		logger.Log.Error().Err(err).Msg("failed to generate refresh token")
+		logger.FromContext(ctx).Error().Err(err).Msg("failed to generate refresh token")
 		return "", "", err
 	}
 

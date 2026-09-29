@@ -42,8 +42,7 @@ func RunREST(
 	r.Use(chimiddleware.RealIP)
 	r.Use(middleware.HTTPTracing("analytics"))
 
-	r.Use(chimiddleware.Logger)
-
+	r.Use(middleware.HTTPLogging)
 	r.Use(middleware.HTTPMetrics(httpMetrics))
 
 	r.Use(chimiddleware.Recoverer)

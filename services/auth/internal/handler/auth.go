@@ -41,7 +41,7 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		logger.Log.Error().Err(err).Msg("register handler failed")
+		logger.FromContext(r.Context()).Error().Err(err).Msg("register handler failed")
 		writeError(w, http.StatusInternalServerError, "interval server error")
 		return
 	}
@@ -77,7 +77,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, service.ErrInvalidCredentials):
 			writeError(w, http.StatusUnauthorized, "invalid credentials")
 		default:
-			logger.Log.Error().Err(err).Msg("login handler failed")
+			logger.FromContext(r.Context()).Error().Err(err).Msg("login handler failed")
 			writeError(w, http.StatusInternalServerError, "interval service error")
 		}
 		return

@@ -20,7 +20,7 @@ func (h *PlannerHandler) Reminders(w http.ResponseWriter, r *http.Request) {
 	now := time.Now()
 	reminders, err := h.plannerService.GetUpcomingWorkouts(r.Context(), now, now.Add(24*time.Hour))
 	if err != nil {
-		logger.Log.Error().Err(err).Msg("failed to get upcoming workouts")
+		logger.FromContext(r.Context()).Error().Err(err).Msg("failed to get upcoming workouts")
 		writeError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}

@@ -30,7 +30,7 @@ func (h *AnalyticsHandler) Dashboard(w http.ResponseWriter, r *http.Request) {
 
 	stats, err := h.analyticsService.GetUserStats(r.Context(), userID)
 	if err != nil {
-		logger.Log.Error().Err(err).Msg("failed to get user stats")
+		logger.FromContext(r.Context()).Error().Err(err).Msg("failed to get user stats")
 		writeError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
@@ -42,7 +42,7 @@ func (h *AnalyticsHandler) Dashboard(w http.ResponseWriter, r *http.Request) {
 	// Получаем последние 5 тренировок
 	summaries, err := h.analyticsService.ListWorkoutSummaries(r.Context(), userID, 5, 0)
 	if err != nil {
-		logger.Log.Error().Err(err).Msg("failed to list workout summaries")
+		logger.FromContext(r.Context()).Error().Err(err).Msg("failed to list workout summaries")
 		writeError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
@@ -65,7 +65,7 @@ func (h *AnalyticsHandler) Progress(w http.ResponseWriter, r *http.Request) {
 	if exerciseID != "" {
 		progress, err := h.analyticsService.GetExerciseProgress(r.Context(), userID, exerciseID)
 		if err != nil {
-			logger.Log.Error().Err(err).Msg("failed to get exercise progress")
+			logger.FromContext(r.Context()).Error().Err(err).Msg("failed to get exercise progress")
 			writeError(w, http.StatusInternalServerError, "internal server error")
 			return
 		}
@@ -79,7 +79,7 @@ func (h *AnalyticsHandler) Progress(w http.ResponseWriter, r *http.Request) {
 
 	progressList, err := h.analyticsService.ListExerciseProgress(r.Context(), userID)
 	if err != nil {
-		logger.Log.Error().Err(err).Msg("failed to list exercise progress")
+		logger.FromContext(r.Context()).Error().Err(err).Msg("failed to list exercise progress")
 		writeError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
@@ -107,7 +107,7 @@ func (h *AnalyticsHandler) WorkoutHistory(w http.ResponseWriter, r *http.Request
 
 	summaries, err := h.analyticsService.ListWorkoutSummaries(r.Context(), userID, limit, offset)
 	if err != nil {
-		logger.Log.Error().Err(err).Msg("failed to list workout summaries")
+		logger.FromContext(r.Context()).Error().Err(err).Msg("failed to list workout summaries")
 		writeError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}

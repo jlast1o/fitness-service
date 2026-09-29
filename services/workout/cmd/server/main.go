@@ -26,7 +26,7 @@ import (
 
 func main() {
 	// 1. Инициализация логгера
-	logger.Init("info")
+	logger.Init("workout", "info")
 
 	// 2. Загрузка конфигурации
 	cfg, err := config.Load()

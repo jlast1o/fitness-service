@@ -41,7 +41,7 @@ func RunREST(
 
 	r.Use(middleware.HTTPTracing("planner"))
 
-	r.Use(chimiddleware.Logger)
+	r.Use(middleware.HTTPLogging)
 
 	r.Use(middleware.HTTPMetrics(httpMetrics))
 

@@ -1,0 +1,67 @@
+discovery.docker "containers" {
+  host = "unix:///var/run/docker.sock"
+}
+
+discovery.relabel "app_containers" {
+  targets = discovery.docker.containers.targets
+
+  // Берём только наши application services.
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    regex         = "auth|workout|analytics|planner|notification"
+    action        = "keep"
+  }
+
+  // Docker Compose service name -> Loki label service.
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    target_label  = "service"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    target_label  = "container"
+  }
+}
+
+loki.source.docker "app_logs" {
+  host       = "unix:///var/run/docker.sock"
+  targets    = discovery.relabel.app_containers.output
+  forward_to = [loki.process.app_logs.receiver]
+}
+
+loki.process "app_logs" {
+  stage.json {
+    expressions = {
+      level      = "level",
+      trace_id   = "trace_id",
+      span_id    = "span_id",
+      request_id = "request_id",
+    }
+  }
+
+  // Низкая cardinality -> можно индексировать.
+  stage.labels {
+    values = {
+      level = "level",
+    }
+  }
+
+  // Высокая cardinality -> НЕ labels.
+  stage.structured_metadata {
+    values = {
+      trace_id   = "trace_id",
+      span_id    = "span_id",
+      request_id = "request_id",
+    }
+  }
+
+  forward_to = [loki.write.local.receiver]
+}
+
+loki.write "local" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}

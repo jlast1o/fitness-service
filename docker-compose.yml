@@ -202,6 +202,8 @@ services:
 
     depends_on:
       - prometheus
+      - loki
+      - tempo
 
   alertmanager:
     image: prom/alertmanager:latest
@@ -245,6 +247,55 @@ services:
         - tempo_data:/data/tempo
       restart: "no"
 
+  loki-init:
+    image: alpine:3.19
+    user: "0:0"
+    command:
+      - "sh"
+      - "-c"
+      - >
+        mkdir -p
+        /data/loki/chunks
+        /data/loki/rules
+        /data/loki/compactor
+        &&
+        chown -R 10001:10001 /data/loki
+    volumes:
+      - loki_data:/data/loki
+    restart: "no"
+
+  loki:
+    image: grafana/loki:3.7.3
+    command:
+      - "-config.file=/etc/loki/loki.yml"
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./monitoring/loki/loki.yml:/etc/loki/loki.yml:ro
+      - loki_data:/data/loki
+    depends_on:
+      loki-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  alloy:
+    image: grafana/alloy:v1.20.1
+    user: "0:0"
+    command:
+      - "run"
+      - "--server.http.listen-addr=0.0.0.0:12345"
+      - "--storage.path=/var/lib/alloy/data"
+      - "/etc/alloy/config.alloy"
+    ports:
+      - "12345:12345"
+    volumes:
+      - ./monitoring/alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - alloy_data:/var/lib/alloy/data
+    depends_on:
+      - loki
+    restart: unless-stopped
+
 volumes:
   pgdata_auth:
   pgdata_workout:
@@ -254,7 +305,8 @@ volumes:
   prometheus_data:
   grafana_data:
   tempo_data:
-
+  loki_data:
+  alloy_data:
 
 secrets:
   telegram_bot_token:

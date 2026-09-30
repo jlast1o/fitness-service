@@ -7,3 +7,17 @@ datasources:
     access: proxy
     url: http://tempo:3200
     editable: true
+
+    jsonData:
+      tracesToLogsV2:
+        datasourceUid: loki
+
+        spanStartTimeShift: "-5s"
+        spanEndTimeShift: "5s"
+
+        tags:
+          - key: service.name
+            value: service
+
+        filterByTraceID: true
+        filterBySpanID: false

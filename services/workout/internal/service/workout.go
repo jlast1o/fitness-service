@@ -28,15 +28,17 @@ type WorkoutService struct {
 	repo             repository.WorkoutRepository
 	redisClient      redis.Cmdable
 	exerciseCacheTTL time.Duration
+	cacheTimeout     time.Duration
 	tracer           trace.Tracer
 }
 
 type Option func(*WorkoutService)
 
-func WithRedis(client redis.Cmdable, cacheTTL time.Duration) Option {
+func WithRedis(client redis.Cmdable, cacheTTL time.Duration, cacheTimeout time.Duration) Option {
 	return func(s *WorkoutService) {
 		s.redisClient = client
 		s.exerciseCacheTTL = cacheTTL
+		s.cacheTimeout = cacheTimeout
 	}
 }
 
@@ -192,20 +194,31 @@ func (s *WorkoutService) ListExercises(ctx context.Context) ([]domain.Exercise, 
 	ctx, span := s.tracer.Start(ctx, "WorkoutService.ListExercises")
 	defer span.End()
 
-	if s.redisClient != nil {
-		cached, err := s.redisClient.Get(ctx, exercisesCacheKey).Bytes()
+	cacheAvailable := s.redisClient != nil
 
-		if err == nil {
+	if cacheAvailable {
+		cacheCtx, cancel := s.cacheContext(ctx)
+		cached, err := s.redisClient.Get(cacheCtx, exercisesCacheKey).Bytes()
+		cancel()
+
+		switch {
+		case err == nil:
 			var exercises []domain.Exercise
 
 			if err := json.Unmarshal(cached, &exercises); err == nil {
 				return exercises, nil
-			} else {
-				logger.FromContext(ctx).Warn().
-					Err(err).
-					Msg("failed to unmarshal exercises cache")
 			}
-		} else if !errors.Is(err, redis.Nil) {
+
+			logger.FromContext(ctx).Warn().
+				Err(err).
+				Msg("failed to unmarshal exercises cache")
+
+		case errors.Is(err, redis.Nil):
+			// Cache miss: Redis работает, просто ключа нет.
+
+		default:
+			cacheAvailable = false
+
 			logger.FromContext(ctx).Warn().
 				Err(err).
 				Msg("failed to read exercises cache")
@@ -217,21 +230,27 @@ func (s *WorkoutService) ListExercises(ctx context.Context) ([]domain.Exercise, 
 		return nil, err
 	}
 
-	if s.redisClient != nil {
+	if cacheAvailable {
 		data, err := json.Marshal(exercises)
 		if err != nil {
 			logger.FromContext(ctx).Warn().
 				Err(err).
 				Msg("failed to marshal exercise cache")
-		} else if err := s.redisClient.Set(
-			ctx,
-			exercisesCacheKey,
-			data,
-			s.exerciseCacheTTL,
-		).Err(); err != nil {
-			logger.FromContext(ctx).Warn().
-				Err(err).
-				Msg("failed to write exercises cache")
+		} else {
+			cacheCtx, cancel := s.cacheContext(ctx)
+			err := s.redisClient.Set(
+				cacheCtx,
+				exercisesCacheKey,
+				data,
+				s.exerciseCacheTTL,
+			).Err()
+			cancel()
+
+			if err != nil {
+				logger.FromContext(ctx).Warn().
+					Err(err).
+					Msg("failed to write exercises cache")
+			}
 		}
 	}
 
@@ -251,7 +270,11 @@ func (s *WorkoutService) CreateExercise(ctx context.Context, exercise *domain.Ex
 	}
 
 	if s.redisClient != nil {
-		if err := s.redisClient.Del(ctx, exercisesCacheKey).Err(); err != nil {
+		cacheCtx, cancel := s.cacheContext(ctx)
+		err := s.redisClient.Del(cacheCtx, exercisesCacheKey).Err()
+		cancel()
+
+		if err != nil {
 			logger.FromContext(ctx).Warn().
 				Err(err).
 				Msg("failed to invalidate exercises cache")
@@ -259,4 +282,12 @@ func (s *WorkoutService) CreateExercise(ctx context.Context, exercise *domain.Ex
 	}
 
 	return nil
+}
+
+func (s *WorkoutService) cacheContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if s.cacheTimeout <= 0 {
+		return context.WithCancel(ctx)
+	}
+
+	return context.WithTimeout(ctx, s.cacheTimeout)
 }

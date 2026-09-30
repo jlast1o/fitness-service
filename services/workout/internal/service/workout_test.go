@@ -332,7 +332,7 @@ func TestListExercises_CacheHit(t *testing.T) {
 
 	svc := service.NewWorkoutService(
 		mockRepo,
-		service.WithRedis(redisClient, 10*time.Minute),
+		service.WithRedis(redisClient, 10*time.Minute, 750*time.Millisecond),
 	)
 
 	expectedExercises := []domain.Exercise{
@@ -371,7 +371,7 @@ func TestListExercises_CacheMiss(t *testing.T) {
 
 	svc := service.NewWorkoutService(
 		mockRepo,
-		service.WithRedis(redisClient, 10*time.Minute),
+		service.WithRedis(redisClient, 10*time.Minute, 750*time.Millisecond),
 	)
 
 	expectedExercises := []domain.Exercise{
@@ -417,7 +417,7 @@ func TestCreateExercise_InvalidatesCache(t *testing.T) {
 
 	svc := service.NewWorkoutService(
 		mockRepo,
-		service.WithRedis(redisClient, 10*time.Minute),
+		service.WithRedis(redisClient, 10*time.Minute, 750*time.Millisecond),
 	)
 
 	err := redisClient.Set(

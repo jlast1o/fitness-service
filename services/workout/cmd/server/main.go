@@ -66,7 +66,13 @@ func main() {
 	workoutRepo := postgres.NewWorkoutRepo(pool)
 
 	redisClient := redis.NewClient(&redis.Options{
-		Addr: cfg.RedisAddr,
+		Addr:                  cfg.RedisAddr,
+		DialTimeout:           cfg.RedisDialTimeout,
+		ReadTimeout:           cfg.RedisReadTimeout,
+		WriteTimeout:          cfg.RedisWriteTimeout,
+		MaxRetries:            cfg.RedisMaxRetries,
+		DialerRetries:         cfg.RedisDialRetries,
+		ContextTimeoutEnabled: true,
 	})
 
 	if err := redisotel.InstrumentTracing(redisClient); err != nil {
@@ -82,7 +88,7 @@ func main() {
 	// 7. Создаём сервис
 	workoutService := service.NewWorkoutService(
 		workoutRepo,
-		service.WithRedis(redisClient, cfg.ExerciseCacheTTL),
+		service.WithRedis(redisClient, cfg.ExerciseCacheTTL, cfg.RedisCacheTimeout),
 	)
 
 	// 8. Создаём обработчики

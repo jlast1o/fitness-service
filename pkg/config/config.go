@@ -18,6 +18,15 @@ type Config struct {
 	RedisAddr        string        `envconfig:"REDIS_ADDR" default:"localhost:6379"`
 	ExerciseCacheTTL time.Duration `envconfig:"EXERCISE_CACHE_TTL" default:"10m"`
 
+	RedisDialTimeout  time.Duration `envconfig:"REDIS_DIAL_TIMEOUT" default:"500ms"`
+	RedisReadTimeout  time.Duration `envconfig:"REDIS_READ_TIMEOUT" default:"500ms"`
+	RedisWriteTimeout time.Duration `envconfig:"REDIS_WRITE_TIMEOUT" default:"500ms"`
+
+	RedisCacheTimeout time.Duration `envconfig:"REDIS_CACHE_TIMEOUT" default:"750ms"`
+
+	RedisMaxRetries  int `envconfig:"REDIS_MAX_RETRIES" default:"-1"` // отключаем автоматические повторные попытки, чтобы не блокировать обработку запросов
+	RedisDialRetries int `envconfig:"REDIS_DIAL_RETRIES" default:"1"` // количество попыток подключения к Redis при старте приложения (0 = default, default = 5)
+
 	OTLPEndpoint string `envconfig:"TRACING_OTLP_ENDPOINT" default:"localhost:4317"`
 }
 

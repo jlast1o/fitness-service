@@ -48,7 +48,7 @@ func main() {
 	}
 
 	// 4. Подключение к базе данных
-	pool, err := database.NewPool(ctx, cfg.DatabaseURL)
+	pool, err := database.NewPool(ctx, cfg.DatabaseURL, cfg.DatabaseConnectTimeout, cfg.DatabaseOperationTimeout)
 	if err != nil {
 		logger.Log.Fatal().Err(err).Msg("Failed to connect to database")
 	}
@@ -60,7 +60,7 @@ func main() {
 	}
 
 	// 6. Создаём репозиторий
-	analyticsRepo := postgres.NewAnalyticsRepo(pool)
+	analyticsRepo := postgres.NewAnalyticsRepo(pool, cfg.DatabaseOperationTimeout)
 
 	// 7. Создаём сервис
 	analyticsService := service.NewAnalyticsService(analyticsRepo)

@@ -7,9 +7,11 @@ import (
 )
 
 type Config struct {
-	HTTPPort    string `envconfig:"HTTP_PORT" default:"8080"`
-	GRPCPort    string `envconfig:"GRPC_PORT" default:"50051"`
-	DatabaseURL string `envconfig:"DATABASE_URL" required:"true"`
+	HTTPPort                 string        `envconfig:"HTTP_PORT" default:"8080"`
+	GRPCPort                 string        `envconfig:"GRPC_PORT" default:"50051"`
+	DatabaseURL              string        `envconfig:"DATABASE_URL" required:"true"`
+	DatabaseConnectTimeout   time.Duration `envconfig:"DATABASE_CONNECT_TIMEOUT" default:"1s"` // таймаут подключения к базе данных при старте приложения
+	DatabaseOperationTimeout time.Duration `envconfig:"DATABASE_OPERATION_TIMEOUT" default:"2s"`
 
 	JWTSecret     string        `envconfig:"JWT_SECRET" required:"true"`
 	JWTAccessTTL  time.Duration `envconfig:"JWT_ACCESS_TTL" default:"15m"`

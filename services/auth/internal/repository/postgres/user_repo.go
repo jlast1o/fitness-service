@@ -6,20 +6,28 @@ import (
 	"fitness-platform/services/auth/internal/domain"
 	"fitness-platform/services/auth/internal/repository"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type UserRepo struct {
-	pool *pgxpool.Pool
+	pool             *pgxpool.Pool
+	operationTimeout time.Duration
 }
 
-func NewUserRepo(pool *pgxpool.Pool) repository.UserRepository {
-	return &UserRepo{pool: pool}
+func NewUserRepo(pool *pgxpool.Pool, operationTimeout time.Duration) repository.UserRepository {
+	return &UserRepo{
+		pool:             pool,
+		operationTimeout: operationTimeout,
+	}
 }
 
 func (r *UserRepo) CreateUser(ctx context.Context, user *domain.User) error {
+	ctx, cancel := r.operationCtx(ctx)
+	defer cancel()
+
 	query := `INSERT INTO users (email, password_hash) VALUES ($1, $2) RETURNING id, created_at, updated_at`
 
 	err := r.pool.QueryRow(ctx, query, user.Email, user.PasswordHash).Scan(&user.ID, &user.CreatedAt, &user.UpdatedAt)
@@ -32,6 +40,9 @@ func (r *UserRepo) CreateUser(ctx context.Context, user *domain.User) error {
 }
 
 func (r *UserRepo) GetUserByEmail(ctx context.Context, email string) (*domain.User, error) {
+	ctx, cancel := r.operationCtx(ctx)
+	defer cancel()
+
 	query := `SELECT id, email, password_hash, created_at, updated_at FROM users where email = $1`
 
 	user := &domain.User{}
@@ -45,4 +56,12 @@ func (r *UserRepo) GetUserByEmail(ctx context.Context, email string) (*domain.Us
 	}
 
 	return user, nil
+}
+
+func (r *UserRepo) operationCtx(ctx context.Context) (context.Context, context.CancelFunc) {
+	if r.operationTimeout <= 0 {
+		return context.WithCancel(ctx)
+	}
+
+	return context.WithTimeout(ctx, r.operationTimeout)
 }

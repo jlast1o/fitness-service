@@ -86,7 +86,7 @@ func createTestExercise(t *testing.T, pool *pgxpool.Pool) string {
 		Category:    "Compound",
 	}
 	// Используем репозиторий напрямую
-	repo := postgres.NewWorkoutRepo(pool)
+	repo := postgres.NewWorkoutRepo(pool, 5*time.Second)
 	err := repo.CreateExercise(ctx, exercise)
 	require.NoError(t, err)
 	require.NotEmpty(t, exercise.ID)
@@ -98,7 +98,7 @@ func TestCreateWorkout_Success(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
-	repo := postgres.NewWorkoutRepo(pool)
+	repo := postgres.NewWorkoutRepo(pool, 5*time.Second)
 
 	exerciseID := createTestExercise(t, pool)
 
@@ -140,7 +140,7 @@ func TestGetWorkoutByID_NotFound(t *testing.T) {
 	pool, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	repo := postgres.NewWorkoutRepo(pool)
+	repo := postgres.NewWorkoutRepo(pool, 5*time.Second)
 	workout, sets, err := repo.GetWorkoutByID(context.Background(), "00000000-0000-0000-0000-000000000000")
 	require.NoError(t, err)
 	require.Nil(t, workout)
@@ -152,7 +152,7 @@ func TestDeleteWorkout_Cascade(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
-	repo := postgres.NewWorkoutRepo(pool)
+	repo := postgres.NewWorkoutRepo(pool, 5*time.Second)
 
 	exerciseID := createTestExercise(t, pool)
 
@@ -190,7 +190,7 @@ func TestListWorkoutsByUser(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
-	repo := postgres.NewWorkoutRepo(pool)
+	repo := postgres.NewWorkoutRepo(pool, 5*time.Second)
 
 	exerciseID := createTestExercise(t, pool)
 
@@ -217,7 +217,7 @@ func TestUpdateWorkout(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
-	repo := postgres.NewWorkoutRepo(pool)
+	repo := postgres.NewWorkoutRepo(pool, 5*time.Second)
 
 	exerciseID := createTestExercise(t, pool)
 
@@ -245,7 +245,7 @@ func TestListExercises(t *testing.T) {
 	pool, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	repo := postgres.NewWorkoutRepo(pool)
+	repo := postgres.NewWorkoutRepo(pool, 2*time.Second)
 
 	// Создаём несколько упражнений
 	ex1 := &domain.Exercise{Name: "Squat", MuscleGroup: "Legs", Category: "Compound"}

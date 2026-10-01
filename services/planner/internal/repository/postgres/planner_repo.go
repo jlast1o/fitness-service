@@ -14,16 +14,23 @@ import (
 
 // PlannerRepo реализует интерфейс repository.PlannerRepository.
 type PlannerRepo struct {
-	pool *pgxpool.Pool
+	pool             *pgxpool.Pool
+	operationTimeout time.Duration
 }
 
 // NewPlannerRepo создаёт новый экземпляр PlannerRepo.
-func NewPlannerRepo(pool *pgxpool.Pool) repository.PlannerRepository {
-	return &PlannerRepo{pool: pool}
+func NewPlannerRepo(pool *pgxpool.Pool, operationTimeout time.Duration) repository.PlannerRepository {
+	return &PlannerRepo{
+		pool:             pool,
+		operationTimeout: operationTimeout,
+	}
 }
 
 // UpsertUserProfile вставляет или обновляет тренировочный профиль пользователя.
 func (r *PlannerRepo) UpsertUserProfile(ctx context.Context, profile *domain.UserProfile) error {
+	ctx, cancel := r.operationCtx(ctx)
+	defer cancel()
+
 	if profile.Injuries == nil {
 		profile.Injuries = map[string]any{}
 	}
@@ -59,6 +66,9 @@ func (r *PlannerRepo) UpsertUserProfile(ctx context.Context, profile *domain.Use
 
 // GetUserProfile возвращает профиль пользователя по ID.
 func (r *PlannerRepo) GetUserProfile(ctx context.Context, userID string) (*domain.UserProfile, error) {
+	ctx, cancel := r.operationCtx(ctx)
+	defer cancel()
+
 	query := `
 		SELECT user_id, goal, experience_level, days_per_week, injuries, current_1rm, created_at, updated_at
 		FROM user_profiles
@@ -86,6 +96,9 @@ func (r *PlannerRepo) GetUserProfile(ctx context.Context, userID string) (*domai
 
 // ListAvailableExercises возвращает все упражнения из справочника Planner.
 func (r *PlannerRepo) ListAvailableExercises(ctx context.Context) ([]domain.AvailableExercise, error) {
+	ctx, cancel := r.operationCtx(ctx)
+	defer cancel()
+
 	query := `
 		SELECT id, name, muscle_group, category, created_at, updated_at
 		FROM available_exercises
@@ -113,6 +126,9 @@ func (r *PlannerRepo) ListAvailableExercises(ctx context.Context) ([]domain.Avai
 
 // GetAvailableExerciseByID возвращает упражнение по ID.
 func (r *PlannerRepo) GetAvailableExerciseByID(ctx context.Context, exerciseID string) (*domain.AvailableExercise, error) {
+	ctx, cancel := r.operationCtx(ctx)
+	defer cancel()
+
 	query := `
 		SELECT id, name, muscle_group, category, created_at, updated_at
 		FROM available_exercises
@@ -144,11 +160,20 @@ func (r *PlannerRepo) CreatePlan(
 	days []domain.PlanDay,
 	exercises []domain.PlannedExercise,
 ) error {
+	ctx, cancel := r.operationCtx(ctx)
+	defer cancel()
+
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin transaction: %w", err)
 	}
-	defer tx.Rollback(ctx)
+
+	defer func() {
+		rollbackCtx, rollbackCancel := r.operationCtx(context.Background())
+		defer rollbackCancel()
+
+		_ = tx.Rollback(rollbackCtx)
+	}()
 
 	// Вставляем план (здесь ID по-прежнему генерируется базой)
 	planQuery := `
@@ -214,6 +239,9 @@ func (r *PlannerRepo) CreatePlan(
 
 // GetPlanByID возвращает план по ID.
 func (r *PlannerRepo) GetPlanByID(ctx context.Context, planID string) (*domain.TrainingPlan, error) {
+	ctx, cancel := r.operationCtx(ctx)
+	defer cancel()
+
 	query := `
 		SELECT id, user_id, name, goal, experience_level, start_date, end_date, status, progression_rule, created_at, updated_at
 		FROM training_plans
@@ -244,6 +272,9 @@ func (r *PlannerRepo) GetPlanByID(ctx context.Context, planID string) (*domain.T
 
 // GetActivePlanByUserID возвращает активный план пользователя.
 func (r *PlannerRepo) GetActivePlanByUserID(ctx context.Context, userID string) (*domain.TrainingPlan, error) {
+	ctx, cancel := r.operationCtx(ctx)
+	defer cancel()
+
 	query := `
 		SELECT id, user_id, name, goal, experience_level, start_date, end_date, status, progression_rule, created_at, updated_at
 		FROM training_plans
@@ -276,6 +307,9 @@ func (r *PlannerRepo) GetActivePlanByUserID(ctx context.Context, userID string) 
 
 // ListPlansByUserID возвращает все планы пользователя.
 func (r *PlannerRepo) ListPlansByUserID(ctx context.Context, userID string) ([]domain.TrainingPlan, error) {
+	ctx, cancel := r.operationCtx(ctx)
+	defer cancel()
+
 	query := `
 		SELECT id, user_id, name, goal, experience_level, start_date, end_date, status, progression_rule, created_at, updated_at
 		FROM training_plans
@@ -305,6 +339,9 @@ func (r *PlannerRepo) ListPlansByUserID(ctx context.Context, userID string) ([]d
 
 // UpdatePlanStatus обновляет статус плана.
 func (r *PlannerRepo) UpdatePlanStatus(ctx context.Context, planID, status string) error {
+	ctx, cancel := r.operationCtx(ctx)
+	defer cancel()
+
 	_, err := r.pool.Exec(ctx, `UPDATE training_plans SET status = $2, updated_at = NOW() WHERE id = $1`, planID, status)
 	if err != nil {
 		return fmt.Errorf("update plan status: %w", err)
@@ -314,6 +351,9 @@ func (r *PlannerRepo) UpdatePlanStatus(ctx context.Context, planID, status strin
 
 // GetPlanWeeks возвращает недели плана по planID.
 func (r *PlannerRepo) GetPlanWeeks(ctx context.Context, planID string) ([]domain.PlanWeek, error) {
+	ctx, cancel := r.operationCtx(ctx)
+	defer cancel()
+
 	query := `
 		SELECT id, plan_id, week_number, focus, created_at
 		FROM plan_weeks
@@ -339,6 +379,9 @@ func (r *PlannerRepo) GetPlanWeeks(ctx context.Context, planID string) ([]domain
 
 // GetPlanDays возвращает дни недели по weekID.
 func (r *PlannerRepo) GetPlanDays(ctx context.Context, weekID string) ([]domain.PlanDay, error) {
+	ctx, cancel := r.operationCtx(ctx)
+	defer cancel()
+
 	query := `
 		SELECT id, week_id, day_number, date, name, created_at
 		FROM plan_days
@@ -364,6 +407,9 @@ func (r *PlannerRepo) GetPlanDays(ctx context.Context, weekID string) ([]domain.
 
 // GetPlannedExercises возвращает запланированные упражнения для дня.
 func (r *PlannerRepo) GetPlannedExercises(ctx context.Context, dayID string) ([]domain.PlannedExercise, error) {
+	ctx, cancel := r.operationCtx(ctx)
+	defer cancel()
+
 	query := `
 		SELECT id, day_id, exercise_id, target_sets, target_reps_min, target_reps_max,
 		       target_weight, target_rpe, notes, order_index, created_at, updated_at
@@ -395,6 +441,9 @@ func (r *PlannerRepo) GetPlannedExercises(ctx context.Context, dayID string) ([]
 // GetNextPlannedDay возвращает ближайший запланированный день и его упражнения.
 // fromDate — дата, от которой ищем (обычно текущая).
 func (r *PlannerRepo) GetNextPlannedDay(ctx context.Context, userID string, fromDate time.Time) (*domain.PlanDay, []domain.PlannedExercise, error) {
+	ctx, cancel := r.operationCtx(ctx)
+	defer cancel()
+
 	// Находим ближайший день для активного плана пользователя, начиная с fromDate
 	dayQuery := `
 		SELECT pd.id, pd.week_id, pd.day_number, pd.date, pd.name, pd.created_at
@@ -428,6 +477,9 @@ func (r *PlannerRepo) GetNextPlannedDay(ctx context.Context, userID string, from
 // GetPlannedExercisesForDate возвращает запланированные упражнения на конкретную дату.
 // Используется при адаптации: по дате фактической тренировки находим план.
 func (r *PlannerRepo) GetPlannedExercisesForDate(ctx context.Context, userID string, date time.Time) ([]domain.PlannedExercise, error) {
+	ctx, cancel := r.operationCtx(ctx)
+	defer cancel()
+
 	// Находим день плана на эту дату
 	dayQuery := `
 		SELECT pd.id
@@ -451,6 +503,9 @@ func (r *PlannerRepo) GetPlannedExercisesForDate(ctx context.Context, userID str
 
 // UpdatePlannedExercise обновляет параметры запланированного упражнения.
 func (r *PlannerRepo) UpdatePlannedExercise(ctx context.Context, exercise *domain.PlannedExercise) error {
+	ctx, cancel := r.operationCtx(ctx)
+	defer cancel()
+
 	query := `
 		UPDATE planned_exercises
 		SET target_sets = $2,
@@ -481,6 +536,9 @@ func (r *PlannerRepo) UpdatePlannedExercise(ctx context.Context, exercise *domai
 
 // GetUpcomingWorkouts возвращает предстоящие тренировки для напоминаний.
 func (r *PlannerRepo) GetUpcomingWorkouts(ctx context.Context, from, to time.Time) ([]domain.WorkoutReminder, error) {
+	ctx, cancel := r.operationCtx(ctx)
+	defer cancel()
+
 	query := `
 		SELECT tp.user_id, pd.name, pd.date
 		FROM plan_days pd
@@ -510,9 +568,20 @@ func (r *PlannerRepo) GetUpcomingWorkouts(ctx context.Context, from, to time.Tim
 	return reminders, rows.Err()
 }
 func (r *PlannerRepo) DeactivateActivePlans(ctx context.Context, userID string) error {
+	ctx, cancel := r.operationCtx(ctx)
+	defer cancel()
+
 	_, err := r.pool.Exec(ctx, `UPDATE training_plans SET status = 'completed', updated_at = NOW() WHERE user_id = $1 AND status = 'active'`, userID)
 	if err != nil {
 		return fmt.Errorf("deactivate active plans: %w", err)
 	}
 	return nil
+}
+
+func (r *PlannerRepo) operationCtx(ctx context.Context) (context.Context, context.CancelFunc) {
+	if r.operationTimeout <= 0 {
+		return context.WithCancel(ctx)
+	}
+
+	return context.WithTimeout(ctx, r.operationTimeout)
 }

@@ -79,7 +79,7 @@ func TestCreateUser(t *testing.T) {
 	pool, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	repo := postgres.NewUserRepo(pool)
+	repo := postgres.NewUserRepo(pool, 5*time.Second)
 
 	user := &domain.User{
 		Email:        "john@doe.com",
@@ -97,7 +97,7 @@ func TestGetUserByEmail(t *testing.T) {
 	pool, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	repo := postgres.NewUserRepo(pool)
+	repo := postgres.NewUserRepo(pool, 5*time.Second)
 
 	// Сначала создаём пользователя
 	user := &domain.User{
@@ -120,7 +120,7 @@ func TestGetUserByEmail_NotFound(t *testing.T) {
 	pool, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	repo := postgres.NewUserRepo(pool)
+	repo := postgres.NewUserRepo(pool, 5*time.Second)
 
 	found, err := repo.GetUserByEmail(context.Background(), "nonexistent@example.com")
 	require.NoError(t, err)

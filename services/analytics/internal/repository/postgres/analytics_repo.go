@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -13,16 +14,23 @@ import (
 
 // AnalyticsRepo реализует интерфейс repository.AnalyticsRepository.
 type AnalyticsRepo struct {
-	pool *pgxpool.Pool
+	pool             *pgxpool.Pool
+	operationTimeout time.Duration
 }
 
 // NewAnalyticsRepo создаёт новый экземпляр AnalyticsRepo.
-func NewAnalyticsRepo(pool *pgxpool.Pool) repository.AnalyticsRepository {
-	return &AnalyticsRepo{pool: pool}
+func NewAnalyticsRepo(pool *pgxpool.Pool, operationTimeout time.Duration) repository.AnalyticsRepository {
+	return &AnalyticsRepo{
+		pool:             pool,
+		operationTimeout: operationTimeout,
+	}
 }
 
 // UpsertUserStats вставляет или обновляет агрегированную статистику пользователя.
 func (r *AnalyticsRepo) UpsertUserStats(ctx context.Context, stats *domain.UserStats) error {
+	ctx, cancel := r.operationCtx(ctx)
+	defer cancel()
+
 	query := `
 		INSERT INTO user_stats (user_id, total_workouts, total_volume, avg_intensity, updated_at)
 		VALUES ($1, $2, $3, $4, NOW())
@@ -47,6 +55,9 @@ func (r *AnalyticsRepo) UpsertUserStats(ctx context.Context, stats *domain.UserS
 
 // GetUserStats возвращает статистику пользователя по ID.
 func (r *AnalyticsRepo) GetUserStats(ctx context.Context, userID string) (*domain.UserStats, error) {
+	ctx, cancel := r.operationCtx(ctx)
+	defer cancel()
+
 	query := `
 		SELECT user_id, total_workouts, total_volume, avg_intensity, updated_at
 		FROM user_stats
@@ -71,6 +82,9 @@ func (r *AnalyticsRepo) GetUserStats(ctx context.Context, userID string) (*domai
 
 // UpsertExerciseProgress вставляет или обновляет прогресс по упражнению.
 func (r *AnalyticsRepo) UpsertExerciseProgress(ctx context.Context, progress *domain.ExerciseProgress) error {
+	ctx, cancel := r.operationCtx(ctx)
+	defer cancel()
+
 	query := `
 		INSERT INTO exercise_progress (
 			user_id, exercise_id, best_weight, total_reps, last_workout_at, estimated_1rm, updated_at
@@ -100,6 +114,9 @@ func (r *AnalyticsRepo) UpsertExerciseProgress(ctx context.Context, progress *do
 
 // GetExerciseProgress возвращает прогресс по конкретному упражнению.
 func (r *AnalyticsRepo) GetExerciseProgress(ctx context.Context, userID, exerciseID string) (*domain.ExerciseProgress, error) {
+	ctx, cancel := r.operationCtx(ctx)
+	defer cancel()
+
 	query := `
 		SELECT user_id, exercise_id, best_weight, total_reps, last_workout_at, estimated_1rm, updated_at
 		FROM exercise_progress
@@ -126,6 +143,9 @@ func (r *AnalyticsRepo) GetExerciseProgress(ctx context.Context, userID, exercis
 
 // ListExerciseProgress возвращает прогресс по всем упражнениям пользователя.
 func (r *AnalyticsRepo) ListExerciseProgress(ctx context.Context, userID string) ([]domain.ExerciseProgress, error) {
+	ctx, cancel := r.operationCtx(ctx)
+	defer cancel()
+
 	query := `
 		SELECT user_id, exercise_id, best_weight, total_reps, last_workout_at, estimated_1rm, updated_at
 		FROM exercise_progress
@@ -159,6 +179,9 @@ func (r *AnalyticsRepo) ListExerciseProgress(ctx context.Context, userID string)
 
 // InsertWorkoutSummary вставляет сводку тренировки, игнорируя дубликаты.
 func (r *AnalyticsRepo) InsertWorkoutSummary(ctx context.Context, summary *domain.WorkoutSummary) error {
+	ctx, cancel := r.operationCtx(ctx)
+	defer cancel()
+
 	query := `
 		INSERT INTO workout_summary (workout_id, user_id, name, date, total_volume, set_count, created_at)
 		VALUES ($1, $2, $3, $4, $5, $6, NOW())
@@ -180,6 +203,9 @@ func (r *AnalyticsRepo) InsertWorkoutSummary(ctx context.Context, summary *domai
 
 // ListWorkoutSummaries возвращает список сводок тренировок пользователя.
 func (r *AnalyticsRepo) ListWorkoutSummaries(ctx context.Context, userID string, limit, offset int) ([]domain.WorkoutSummary, error) {
+	ctx, cancel := r.operationCtx(ctx)
+	defer cancel()
+
 	query := `
 		SELECT workout_id, user_id, name, date, total_volume, set_count, created_at
 		FROM workout_summary
@@ -214,6 +240,9 @@ func (r *AnalyticsRepo) ListWorkoutSummaries(ctx context.Context, userID string,
 
 // IsEventProcessed проверяет наличие события в processed_events.
 func (r *AnalyticsRepo) IsEventProcessed(ctx context.Context, eventID string) (bool, error) {
+	ctx, cancel := r.operationCtx(ctx)
+	defer cancel()
+
 	var exists bool
 	query := `SELECT EXISTS(SELECT 1 FROM processed_events WHERE event_id = $1)`
 	err := r.pool.QueryRow(ctx, query, eventID).Scan(&exists)
@@ -225,10 +254,21 @@ func (r *AnalyticsRepo) IsEventProcessed(ctx context.Context, eventID string) (b
 
 // MarkEventProcessed вставляет запись об обработанном событии.
 func (r *AnalyticsRepo) MarkEventProcessed(ctx context.Context, eventID string) error {
+	ctx, cancel := r.operationCtx(ctx)
+	defer cancel()
+
 	query := `INSERT INTO processed_events (event_id) VALUES ($1) ON CONFLICT (event_id) DO NOTHING`
 	_, err := r.pool.Exec(ctx, query, eventID)
 	if err != nil {
 		return fmt.Errorf("mark event processed: %w", err)
 	}
 	return nil
+}
+
+func (r *AnalyticsRepo) operationCtx(ctx context.Context) (context.Context, context.CancelFunc) {
+	if r.operationTimeout <= 0 {
+		return context.WithCancel(ctx)
+	}
+
+	return context.WithTimeout(ctx, r.operationTimeout)
 }

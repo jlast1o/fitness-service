@@ -40,7 +40,7 @@ func main() {
 			Msg("Failed to initialize tracing")
 	}
 
-	pool, err := database.NewPool(ctx, cfg.DatabaseURL)
+	pool, err := database.NewPool(ctx, cfg.DatabaseURL, cfg.DatabaseConnectTimeout, cfg.DatabaseOperationTimeout)
 	if err != nil {
 		logger.Log.Fatal().Err(err).Msg("failed to create connection pool")
 	}
@@ -50,7 +50,7 @@ func main() {
 		logger.Log.Fatal().Err(err).Msg("Failed to run migrations")
 	}
 
-	userRepo := postgres.NewUserRepo(pool)
+	userRepo := postgres.NewUserRepo(pool, cfg.DatabaseOperationTimeout)
 
 	authService := service.NewAuthService(userRepo, cfg.JWTSecret, cfg.JWTAccessTTL, cfg.JWTRefreshTTL)
 

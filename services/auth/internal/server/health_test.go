@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 const (
@@ -29,7 +30,7 @@ func TestReadyHandler_DatabaseAvailable(t *testing.T) {
 		return nil
 	}
 
-	handler := readyHandler(dbCheck)
+	handler := readyHandler(time.Second, dbCheck)
 
 	req := httptest.NewRequest(http.MethodGet, testReadyPath, nil)
 	rec := httptest.NewRecorder()
@@ -46,7 +47,7 @@ func TestReadyHandler_DatabaseUnavailable(t *testing.T) {
 		return errors.New("database unavailable")
 	}
 
-	handler := readyHandler(dbCheck)
+	handler := readyHandler(time.Second, dbCheck)
 
 	req := httptest.NewRequest(http.MethodGet, testReadyPath, nil)
 	rec := httptest.NewRecorder()
@@ -58,6 +59,41 @@ func TestReadyHandler_DatabaseUnavailable(t *testing.T) {
 			"expected status %d, got %d",
 			http.StatusServiceUnavailable,
 			rec.Code,
+		)
+	}
+}
+
+func TestReadyHandler_CheckTimeout(t *testing.T) {
+	check := func(ctx context.Context) error {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+
+	readinessTimeout := 50 * time.Millisecond
+	maxExpectedTime := 250 * time.Millisecond
+
+	handler := readyHandler(readinessTimeout, check)
+
+	req := httptest.NewRequest(http.MethodGet, testReadyPath, nil)
+	rec := httptest.NewRecorder()
+
+	start := time.Now()
+	handler(rec, req)
+	elapsed := time.Since(start)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf(
+			"expected status %d, got %d",
+			http.StatusServiceUnavailable,
+			rec.Code,
+		)
+	}
+
+	if elapsed > maxExpectedTime {
+		t.Fatalf(
+			"readiness check exceeded expected timeout: elapsed=%s, max=%s",
+			elapsed,
+			maxExpectedTime,
 		)
 	}
 }

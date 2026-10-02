@@ -25,6 +25,7 @@ func RunREST(
 	addr string,
 	analyticsHandler *handler.AnalyticsHandler,
 	jwtSecret string,
+	readinessTimeout time.Duration,
 	readinessChecks ...ReadinessCheck,
 ) (func(context.Context) error, error) {
 	r := chi.NewRouter()
@@ -48,7 +49,7 @@ func RunREST(
 	r.Use(chimiddleware.Recoverer)
 
 	r.Get("/health/live", liveHandler)
-	r.Get("/health/ready", readyHandler(readinessChecks...))
+	r.Get("/health/ready", readyHandler(readinessTimeout, readinessChecks...))
 
 	r.Handle(
 		"/metrics",

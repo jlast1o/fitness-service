@@ -12,6 +12,7 @@ type Config struct {
 	DatabaseURL              string        `envconfig:"DATABASE_URL" required:"true"`
 	DatabaseConnectTimeout   time.Duration `envconfig:"DATABASE_CONNECT_TIMEOUT" default:"1s"` // таймаут подключения к базе данных при старте приложения
 	DatabaseOperationTimeout time.Duration `envconfig:"DATABASE_OPERATION_TIMEOUT" default:"2s"`
+	ReadinessTimeout         time.Duration `envconfig:"READINESS_TIMEOUT" default:"1s"`
 
 	JWTSecret     string        `envconfig:"JWT_SECRET" required:"true"`
 	JWTAccessTTL  time.Duration `envconfig:"JWT_ACCESS_TTL" default:"15m"`

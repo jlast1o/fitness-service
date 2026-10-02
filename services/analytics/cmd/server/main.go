@@ -80,13 +80,9 @@ func main() {
 		fmt.Sprintf(":%s", cfg.HTTPPort),
 		analyticsHandler,
 		cfg.JWTSecret,
-
+		cfg.ReadinessTimeout,
 		func(ctx context.Context) error {
 			return pool.Ping(ctx)
-		},
-
-		func(ctx context.Context) error {
-			return redisClient.Ping(ctx).Err()
 		},
 	)
 	if err != nil {

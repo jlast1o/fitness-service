@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 const (
@@ -25,16 +26,12 @@ func TestLiveHandler_OK(t *testing.T) {
 	}
 }
 
-func TestReadyHandler_AllChecksAvailable(t *testing.T) {
-	checkDB := func(ctx context.Context) error {
+func TestReadyHandler_DatabaseAvailable(t *testing.T) {
+	checkDB := func(context.Context) error {
 		return nil
 	}
 
-	checkRedis := func(ctx context.Context) error {
-		return nil
-	}
-
-	handler := readyHandler(checkDB, checkRedis)
+	handler := readyHandler(time.Second, checkDB)
 
 	req := httptest.NewRequest(http.MethodGet, healthReadyEndpoint, nil)
 	rec := httptest.NewRecorder()
@@ -46,12 +43,12 @@ func TestReadyHandler_AllChecksAvailable(t *testing.T) {
 	}
 }
 
-func TestReadyHandler_CheckFailed(t *testing.T) {
-	checkDB := func(ctx context.Context) error {
+func TestReadyHandler_DatabaseUnavailable(t *testing.T) {
+	checkDB := func(context.Context) error {
 		return context.Canceled
 	}
 
-	handler := readyHandler(checkDB)
+	handler := readyHandler(time.Second, checkDB)
 
 	req := httptest.NewRequest(http.MethodGet, healthReadyEndpoint, nil)
 	rec := httptest.NewRecorder()
@@ -60,5 +57,36 @@ func TestReadyHandler_CheckFailed(t *testing.T) {
 
 	if rec.Code != healthFailStatus {
 		t.Fatalf("expected status %d, got %d", healthFailStatus, rec.Code)
+	}
+}
+
+func TestReadyHandler_CheckTimeout(t *testing.T) {
+	check := func(ctx context.Context) error {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+
+	readinessTimeout := 50 * time.Millisecond
+	maxExpectedTime := 250 * time.Millisecond
+
+	handler := readyHandler(readinessTimeout, check)
+
+	req := httptest.NewRequest(http.MethodGet, healthReadyEndpoint, nil)
+	rec := httptest.NewRecorder()
+
+	start := time.Now()
+	handler(rec, req)
+	elapsed := time.Since(start)
+
+	if rec.Code != healthFailStatus {
+		t.Fatalf("expected status %d, got %d", healthFailStatus, rec.Code)
+	}
+
+	if elapsed > maxExpectedTime {
+		t.Fatalf(
+			"readiness check exceeded expected timeout: elapsed=%s, max=%s",
+			elapsed,
+			maxExpectedTime,
+		)
 	}
 }

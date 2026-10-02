@@ -18,7 +18,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-func RunREST(addr string, workoutHandler *handler.WorkoutHandler, jwtSecret string, ReadinessChecks ...ReadinessCheck) (func(context.Context) error, error) {
+func RunREST(addr string, workoutHandler *handler.WorkoutHandler, jwtSecret string, readinessTimeout time.Duration, ReadinessChecks ...ReadinessCheck) (func(context.Context) error, error) {
 	r := chi.NewRouter()
 
 	registry, httpMetrics := appmetrics.NewServiceRegistry()
@@ -35,7 +35,7 @@ func RunREST(addr string, workoutHandler *handler.WorkoutHandler, jwtSecret stri
 	r.Use(chimiddleware.Recoverer)
 
 	r.Get("/health/live", liveHandler)
-	r.Get("/health/ready", readyHandler(ReadinessChecks...))
+	r.Get("/health/ready", readyHandler(readinessTimeout, ReadinessChecks...))
 
 	r.Handle(
 		"/metrics",

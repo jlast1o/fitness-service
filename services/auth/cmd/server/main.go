@@ -59,6 +59,7 @@ func main() {
 	httpShutdown, err := server.RunREST(
 		fmt.Sprintf(":%s", cfg.HTTPPort),
 		authHandler,
+		cfg.ReadinessTimeout,
 		func(ctx context.Context) error {
 			return pool.Ping(ctx)
 		},

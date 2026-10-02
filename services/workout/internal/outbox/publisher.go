@@ -5,10 +5,14 @@ import (
 	"encoding/json"
 	"fitness-platform/pkg/logger"
 	"fitness-platform/services/workout/internal/repository"
+	"fmt"
+	"math/rand/v2"
 	"time"
 
 	"github.com/redis/go-redis/v9"
 )
+
+const maxBackoffInterval = 60 * time.Second
 
 // Publisher отвечает за публикацию outbox-событий в Redis Streams.
 type Publisher struct {
@@ -31,52 +35,96 @@ func NewPublisher(repo repository.WorkoutRepository, redisClient *redis.Client, 
 // Run запускает бесконечный цикл обработки outbox-событий.
 // Останавливается по отмене контекста.
 func (p *Publisher) Run(ctx context.Context) {
-	ticker := time.NewTicker(p.interval)
-	defer ticker.Stop()
+	currentInterval := p.interval
+
+	timer := time.NewTimer(currentInterval)
+	defer timer.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			logger.Log.Info().Msg("outbox publisher stopped")
 			return
-		case <-ticker.C:
-			p.processBatch(ctx)
+
+		case <-timer.C:
+			err := p.processBatch(ctx)
+
+			if ctx.Err() != nil {
+				logger.Log.Info().Msg("outbox publisher stopped")
+				return
+			}
+
+			if err != nil {
+				currentInterval = nextBackoff(currentInterval)
+				retryIn := withJitter(currentInterval)
+
+				logger.Log.Error().
+					Err(err).
+					Dur("retry_in", retryIn).
+					Msg("outbox batch processing failed")
+
+				timer.Reset(retryIn)
+				continue
+			}
+
+			currentInterval = p.interval
+			timer.Reset(currentInterval)
 		}
 	}
 }
 
 // processBatch выбирает неопубликованные события, отправляет их в Redis и помечает.
-func (p *Publisher) processBatch(ctx context.Context) {
+func (p *Publisher) processBatch(ctx context.Context) error {
 	events, err := p.repo.ListPendingOutboxEvents(ctx, 100)
 	if err != nil {
-		logger.Log.Error().Err(err).Msg("failed to list pending outbox events")
-		return
+		return fmt.Errorf("list pending outbox events: %w", err)
 	}
 
 	for _, event := range events {
-		// Сериализуем payload в JSON строку
 		payloadJSON, err := json.Marshal(event.Payload)
 		if err != nil {
-			logger.Log.Error().Err(err).Str("event_id", event.ID).Msg("failed to marshal outbox payload")
+			logger.Log.Error().
+				Err(err).
+				Str("event_id", event.ID).
+				Msg("failed to marshal outbox payload")
+
 			continue
 		}
 
-		// Отправляем в Redis Stream
-		cmd := p.redisClient.XAdd(ctx, &redis.XAddArgs{
+		if err := p.redisClient.XAdd(ctx, &redis.XAddArgs{
 			Stream: p.streamName,
 			Values: map[string]interface{}{
 				"event_type": event.EventType,
 				"payload":    string(payloadJSON),
 			},
-		})
-		if err := cmd.Err(); err != nil {
-			logger.Log.Error().Err(err).Str("event_id", event.ID).Msg("failed to publish event to redis")
-			continue
+		}).Err(); err != nil {
+			return fmt.Errorf("publish outbox event %s: %w", event.ID, err)
 		}
 
-		// Помечаем как опубликованное
 		if err := p.repo.MarkOutboxEventPublished(ctx, event.ID); err != nil {
-			logger.Log.Error().Err(err).Str("event_id", event.ID).Msg("failed to mark outbox event published")
+			return fmt.Errorf("mark outbox event %s published: %w", event.ID, err)
 		}
 	}
+
+	return nil
+}
+
+func nextBackoff(current time.Duration) time.Duration {
+	if current >= maxBackoffInterval/2 {
+		return maxBackoffInterval
+	}
+
+	return current * 2
+}
+
+func withJitter(interval time.Duration) time.Duration {
+	maxJitter := interval / 5 // до 20%
+
+	if maxJitter <= 0 {
+		return interval
+	}
+
+	jitter := time.Duration(rand.Int64N(int64(maxJitter)))
+
+	return interval - jitter
 }

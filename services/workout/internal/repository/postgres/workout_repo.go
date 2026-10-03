@@ -8,6 +8,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"fitness-platform/pkg/events"
 	"fitness-platform/services/workout/internal/domain"
 	"fitness-platform/services/workout/internal/repository"
 )
@@ -116,7 +117,10 @@ func (r *WorkoutRepo) CreateWorkout(ctx context.Context, workout *domain.Workout
 	}
 
 	_, err = tx.Exec(ctx,
-		`INSERT INTO outbox_events (event_type, payload) VALUES ($1, $2)`, "workout.created", eventPayload)
+		`INSERT INTO outbox_events (event_type, event_version, payload) VALUES ($1, $2, $3)`,
+		events.TypeWorkoutCreated,
+		events.Version1,
+		eventPayload)
 
 	if err != nil {
 		return fmt.Errorf("insert outbox_event: %w", err)
@@ -317,8 +321,8 @@ func (r *WorkoutRepo) CreateOutboxEvent(ctx context.Context, event *domain.Outbo
 	if event.Payload == nil {
 		event.Payload = map[string]any{}
 	}
-	query := `INSERT INTO outbox_events (event_type, payload) VALUES ($1, $2) RETURNING id, created_at`
-	err := r.pool.QueryRow(ctx, query, event.EventType, event.Payload).Scan(&event.ID, &event.CreatedAt)
+	query := `INSERT INTO outbox_events (event_type, event_version, payload) VALUES ($1, $2, $3) RETURNING id, created_at`
+	err := r.pool.QueryRow(ctx, query, event.EventType, event.EventVersion, event.Payload).Scan(&event.ID, &event.CreatedAt)
 	if err != nil {
 		return fmt.Errorf("insert outbox event: %w", err)
 	}
@@ -331,7 +335,7 @@ func (r *WorkoutRepo) ListPendingOutboxEvents(ctx context.Context, limit int) ([
 	defer cancel()
 
 	query := `
-		SELECT id, event_type, payload, created_at, published_at
+		SELECT id, event_type, event_version, payload, created_at, published_at
 		FROM outbox_events
 		WHERE published_at IS NULL
 		ORDER BY created_at
@@ -343,17 +347,17 @@ func (r *WorkoutRepo) ListPendingOutboxEvents(ctx context.Context, limit int) ([
 	}
 	defer rows.Close()
 
-	var events []domain.OutboxEvent
+	var outboxEvents []domain.OutboxEvent
 	for rows.Next() {
 		var e domain.OutboxEvent
 		if err := rows.Scan(
-			&e.ID, &e.EventType, &e.Payload, &e.CreatedAt, &e.PublishedAt,
+			&e.ID, &e.EventType, &e.EventVersion, &e.Payload, &e.CreatedAt, &e.PublishedAt,
 		); err != nil {
 			return nil, fmt.Errorf("scan outbox event: %w", err)
 		}
-		events = append(events, e)
+		outboxEvents = append(outboxEvents, e)
 	}
-	return events, rows.Err()
+	return outboxEvents, rows.Err()
 }
 
 // MarkOutboxEventPublished помечает событие как опубликованное.
@@ -466,8 +470,10 @@ func (r *WorkoutRepo) UpdateWorkoutWithSets(ctx context.Context, workout *domain
 		"sets":       setsForEvent,
 	}
 	if _, err := tx.Exec(ctx,
-		`INSERT INTO outbox_events (event_type, payload) VALUES ($1, $2)`,
-		"workout.updated", eventPayload,
+		`INSERT INTO outbox_events (event_type, event_version, payload) VALUES ($1, $2, $3)`,
+		events.TypeWorkoutUpdated,
+		events.Version1,
+		eventPayload,
 	); err != nil {
 		return fmt.Errorf("insert outbox event: %w", err)
 	}

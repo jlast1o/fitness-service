@@ -3,6 +3,7 @@ package outbox
 import (
 	"context"
 	"encoding/json"
+	"fitness-platform/pkg/events"
 	"fitness-platform/pkg/logger"
 	"fitness-platform/services/workout/internal/repository"
 	"fmt"
@@ -75,34 +76,43 @@ func (p *Publisher) Run(ctx context.Context) {
 
 // processBatch выбирает неопубликованные события, отправляет их в Redis и помечает.
 func (p *Publisher) processBatch(ctx context.Context) error {
-	events, err := p.repo.ListPendingOutboxEvents(ctx, 100)
+	pendingEvents, err := p.repo.ListPendingOutboxEvents(ctx, 100)
 	if err != nil {
 		return fmt.Errorf("list pending outbox events: %w", err)
 	}
 
-	for _, event := range events {
+	for _, event := range pendingEvents {
 		payloadJSON, err := json.Marshal(event.Payload)
 		if err != nil {
-			logger.Log.Error().
-				Err(err).
-				Str("event_id", event.ID).
-				Msg("failed to marshal outbox payload")
+			logger.Log.Error().Err(err).Str("event_id", event.ID).Msg("failed to marshal outbox payload")
+			continue
+		}
 
+		envelope := events.Envelope{
+			EventID:      event.ID,
+			EventType:    event.EventType,
+			EventVersion: event.EventVersion,
+			OccurredAt:   event.CreatedAt,
+			Payload:      json.RawMessage(payloadJSON),
+		}
+
+		envelopeJSON, err := json.Marshal(envelope)
+		if err != nil {
+			logger.Log.Error().Err(err).Str("event_id", event.ID).Msg("failed to marshal envelope")
 			continue
 		}
 
 		if err := p.redisClient.XAdd(ctx, &redis.XAddArgs{
 			Stream: p.streamName,
 			Values: map[string]interface{}{
-				"event_type": event.EventType,
-				"payload":    string(payloadJSON),
+				"event": string(envelopeJSON),
 			},
 		}).Err(); err != nil {
 			return fmt.Errorf("publish outbox event %s: %w", event.ID, err)
 		}
 
 		if err := p.repo.MarkOutboxEventPublished(ctx, event.ID); err != nil {
-			return fmt.Errorf("mark outbox event %s published: %w", event.ID, err)
+			return fmt.Errorf("mark outbox event %s as published: %w", event.ID, err)
 		}
 	}
 

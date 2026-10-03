@@ -1,4 +1,4 @@
-DELETE FROM available_exercises
+DELETE FROM exercises
 WHERE id IN (
     '64127532-d0d9-5524-8635-b3d508bd6edb',
     'ec9cc261-85b5-55e5-9d3b-598b0307d4d8',

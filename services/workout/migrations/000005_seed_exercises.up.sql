@@ -1,4 +1,4 @@
-INSERT INTO available_exercises (
+INSERT INTO exercises (
     id,
     name,
     muscle_group,

@@ -246,14 +246,30 @@ func TestListExercises(t *testing.T) {
 	defer cleanup()
 
 	repo := postgres.NewWorkoutRepo(pool, 2*time.Second)
+	ctx := context.Background()
 
-	// Создаём несколько упражнений
-	ex1 := &domain.Exercise{Name: "Squat", MuscleGroup: "Legs", Category: "Compound"}
-	ex2 := &domain.Exercise{Name: "Curl", MuscleGroup: "Arms", Category: "Isolation"}
-	require.NoError(t, repo.CreateExercise(context.Background(), ex1))
-	require.NoError(t, repo.CreateExercise(context.Background(), ex2))
-
-	exercises, err := repo.ListExercises(context.Background())
+	existingExercises, err := repo.ListExercises(ctx)
 	require.NoError(t, err)
-	require.Len(t, exercises, 2)
+
+	ex1 := &domain.Exercise{
+		Name:        "Squat",
+		MuscleGroup: "Legs",
+		Category:    "Compound",
+	}
+	ex2 := &domain.Exercise{
+		Name:        "Curl",
+		MuscleGroup: "Arms",
+		Category:    "Isolation",
+	}
+
+	require.NoError(t, repo.CreateExercise(ctx, ex1))
+	require.NoError(t, repo.CreateExercise(ctx, ex2))
+
+	exercises, err := repo.ListExercises(ctx)
+	require.NoError(t, err)
+
+	require.Len(t, exercises, len(existingExercises)+2)
+
+	require.Contains(t, exercises, *ex1)
+	require.Contains(t, exercises, *ex2)
 }

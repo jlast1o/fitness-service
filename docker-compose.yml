@@ -1,4 +1,9 @@
 services:
+
+  # =========================================================
+  # DATABASES
+  # =========================================================
+
   postgres_auth:
     image: postgres:15-alpine
     environment:
@@ -31,7 +36,6 @@ services:
       timeout: 3s
       retries: 5
 
-  # === НОВЫЙ БЛОК: База данных для аналитики ===
   postgres_analytics:
     image: postgres:15-alpine
     environment:
@@ -39,7 +43,7 @@ services:
       POSTGRES_PASSWORD: secret
       POSTGRES_DB: analyticsdb
     ports:
-      - "5434:5432"   # Наружу пробрасываем на 5434, чтобы не конфликтовать
+      - "5434:5432"
     volumes:
       - pgdata_analytics:/var/lib/postgresql/data
     healthcheck:
@@ -47,6 +51,43 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+
+  postgres_planner:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: secret
+      POSTGRES_DB: plannerdb
+    ports:
+      - "5435:5432"
+    volumes:
+      - pgdata_planner:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d plannerdb"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  postgres_nutrition:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: secret
+      POSTGRES_DB: nutritiondb
+    ports:
+      - "5436:5432"
+    volumes:
+      - pgdata_nutrition:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d nutritiondb"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+
+  # =========================================================
+  # INFRASTRUCTURE
+  # =========================================================
 
   redis:
     image: redis:7-alpine
@@ -60,6 +101,11 @@ services:
       timeout: 3s
       retries: 5
 
+
+  # =========================================================
+  # APPLICATION SERVICES
+  # =========================================================
+
   auth:
     build:
       context: .
@@ -68,7 +114,7 @@ services:
       - "8080:8080"
     environment:
       DATABASE_URL: "postgres://admin:secret@postgres_auth:5432/authdb?sslmode=disable"
-      JWT_SECRET: "my-super-secret-key" # ...env 
+      JWT_SECRET: "my-super-secret-key"
       HTTP_PORT: "8080"
       JWT_ACCESS_TTL: "15m"
       JWT_REFRESH_TTL: "72h"
@@ -95,7 +141,6 @@ services:
       redis:
         condition: service_healthy
 
-  # === НОВЫЙ БЛОК: Сервис аналитики ===
   analytics:
     build:
       context: .
@@ -113,22 +158,6 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-
-  postgres_planner:
-    image: postgres:15-alpine
-    environment:
-      POSTGRES_USER: admin
-      POSTGRES_PASSWORD: secret
-      POSTGRES_DB: plannerdb
-    ports:
-      - "5435:5432"
-    volumes:
-      - pgdata_planner:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U admin -d plannerdb"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
 
   planner:
     build:
@@ -148,6 +177,21 @@ services:
       redis:
         condition: service_healthy
 
+  nutrition:
+    build:
+      context: .
+      dockerfile: services/nutrition/Dockerfile
+    ports:
+      - "8084:8084"
+    environment:
+      DATABASE_URL: "postgres://admin:secret@postgres_nutrition:5432/nutritiondb?sslmode=disable"
+      JWT_SECRET: "my-super-secret-key"
+      HTTP_PORT: "8084"
+      TRACING_OTLP_ENDPOINT: "tempo:4317"
+    depends_on:
+      postgres_nutrition:
+        condition: service_healthy
+
   notification:
     build:
       context: .
@@ -160,6 +204,11 @@ services:
       - redis
       - planner
 
+
+  # =========================================================
+  # MONITORING
+  # =========================================================
+
   blackbox-exporter:
     image: quay.io/prometheus/blackbox-exporter:v0.28.0
     ports:
@@ -170,7 +219,7 @@ services:
       - "--config.file=/config/blackbox.yml"
     depends_on:
       - workout
-  
+
   prometheus:
     image: prom/prometheus:latest
     ports:
@@ -184,22 +233,19 @@ services:
       - "--storage.tsdb.path=/prometheus"
     depends_on:
       - blackbox-exporter
-  
+
   grafana:
     image: grafana/grafana:latest
     ports:
       - "3000:3000"
-
     environment:
       GF_SECURITY_ADMIN_USER: admin
       GF_SECURITY_ADMIN_PASSWORD: admin
       GF_USERS_ALLOW_SIGN_UP: "false"
-
     volumes:
       - grafana_data:/var/lib/grafana
       - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
       - ./monitoring/grafana/dashboards:/etc/grafana/dashboards:ro
-
     depends_on:
       - prometheus
       - loki
@@ -210,14 +256,25 @@ services:
     ports:
       - "9093:9093"
     volumes:
-    - ./monitoring/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
-    - ./monitoring/alertmanager/templates:/etc/alertmanager/templates:ro
+      - ./monitoring/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - ./monitoring/alertmanager/templates:/etc/alertmanager/templates:ro
     secrets:
       - telegram_bot_token
       - telegram_chat_id
     command:
       - "--config.file=/etc/alertmanager/alertmanager.yml"
     restart: unless-stopped
+
+  tempo-init:
+    image: alpine:3.19
+    user: "0:0"
+    command:
+      - "sh"
+      - "-c"
+      - "mkdir -p /data/tempo/wal /data/tempo/blocks && chown -R 10001:10001 /data/tempo"
+    volumes:
+      - tempo_data:/data/tempo
+    restart: "no"
 
   tempo:
     image: grafana/tempo:latest
@@ -234,18 +291,11 @@ services:
       - "4317:4317"
       - "4318:4318"
     restart: unless-stopped
-    
-  
-  tempo-init:
-      image: alpine:3.19
-      user: "0:0"
-      command:
-        - "sh"
-        - "-c"
-        - "mkdir -p /data/tempo/wal /data/tempo/blocks && chown -R 10001:10001 /data/tempo"
-      volumes:
-        - tempo_data:/data/tempo
-      restart: "no"
+
+
+# =========================================================
+# VOLUMES
+# =========================================================
 
   loki-init:
     image: alpine:3.19
@@ -301,12 +351,19 @@ volumes:
   pgdata_workout:
   pgdata_analytics:
   pgdata_planner:
+  pgdata_nutrition:
+
   redisdata:
+
   prometheus_data:
   grafana_data:
   tempo_data:
   loki_data:
   alloy_data:
+
+# =========================================================
+# SECRETS
+# =========================================================
 
 secrets:
   telegram_bot_token:

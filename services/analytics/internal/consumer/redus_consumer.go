@@ -145,6 +145,7 @@ func (c *RedisConsumer) processBatch(ctx context.Context) {
 
 				if err := c.analytics.ProcessWorkoutCreated(
 					ctx,
+					envelope.EventID,
 					workoutEvent,
 				); err != nil {
 					logger.Log.Error().

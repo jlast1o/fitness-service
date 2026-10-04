@@ -24,26 +24,22 @@ func NewAnalyticsService(repo repository.AnalyticsRepository) *AnalyticsService 
 }
 
 // ProcessWorkoutCreated обрабатывает событие о новой тренировке.
-func (s *AnalyticsService) ProcessWorkoutCreated(ctx context.Context, event domain.WorkoutCreatedEvent) error {
+func (s *AnalyticsService) ProcessWorkoutCreated(
+	ctx context.Context,
+	eventID string,
+	event domain.WorkoutCreatedEvent,
+) error {
 	ctx, span := s.tracer.Start(
 		ctx,
 		"AnalyticsService.ProcessWorkoutCreated",
 	)
 	defer span.End()
-	// 1. Считаем общий объём и агрегируем по упражнениям
-	// Проверяем, не обработано ли уже это событие
-	processed, err := s.repo.IsEventProcessed(ctx, event.WorkoutID)
-	if err != nil {
-		logger.FromContext(ctx).Error().Err(err).Str("event_id", event.WorkoutID).Msg("failed to check processed event")
-		return err
-	}
-	if processed {
-		logger.FromContext(ctx).Info().Str("event_id", event.WorkoutID).Msg("event already processed, skipping")
-		return nil
-	}
 
+	// Сначала выполняем вычисления в памяти.
+	// Держать PostgreSQL-транзакцию во время этих расчётов нет необходимости.
 	totalVolume := 0.0
 	totalRepsAll := 0
+
 	exerciseAgg := make(map[string]*struct {
 		BestWeight float64
 		TotalReps  int
@@ -53,6 +49,7 @@ func (s *AnalyticsService) ProcessWorkoutCreated(ctx context.Context, event doma
 
 	for _, set := range event.Sets {
 		volume := set.Weight * float64(set.Reps)
+
 		totalVolume += volume
 		totalRepsAll += set.Reps
 
@@ -64,76 +61,123 @@ func (s *AnalyticsService) ProcessWorkoutCreated(ctx context.Context, event doma
 				LastDate   time.Time
 				Max1RM     float64
 			}{}
+
 			exerciseAgg[set.ExerciseID] = agg
 		}
+
 		if set.Weight > agg.BestWeight {
 			agg.BestWeight = set.Weight
 		}
+
 		agg.TotalReps += set.Reps
+
 		if event.Date.After(agg.LastDate) {
 			agg.LastDate = event.Date
 		}
-		// Расчёт 1ПМ по формуле Эпли
+
 		oneRM := calculate1RM(set.Weight, set.Reps)
+
 		if oneRM > agg.Max1RM {
 			agg.Max1RM = oneRM
 		}
 	}
 
-	// 2. Обновляем user_stats
-	stats, err := s.repo.GetUserStats(ctx, event.UserID)
+	applied, err := s.repo.WithEventTransaction(
+		ctx,
+		eventID,
+		func(
+			ctx context.Context,
+			tx repository.AnalyticsEventTx,
+		) error {
+			// Обновляем агрегированную статистику пользователя.
+			stats, err := tx.GetUserStats(ctx, event.UserID)
+			if err != nil {
+				return err
+			}
+
+			if stats == nil {
+				stats = &domain.UserStats{
+					UserID: event.UserID,
+				}
+			}
+
+			stats.TotalWorkouts++
+			stats.TotalVolume += totalVolume
+
+			if stats.TotalVolume > 0 && totalRepsAll > 0 {
+				stats.AvgIntensity =
+					stats.TotalVolume / float64(totalRepsAll)
+			}
+
+			if err := tx.UpsertUserStats(ctx, stats); err != nil {
+				return err
+			}
+
+			// Обновляем прогресс по каждому упражнению.
+			for exerciseID, agg := range exerciseAgg {
+				progress := &domain.ExerciseProgress{
+					UserID:        event.UserID,
+					ExerciseID:    exerciseID,
+					BestWeight:    agg.BestWeight,
+					TotalReps:     agg.TotalReps,
+					LastWorkoutAt: agg.LastDate,
+					Estimated1RM:  agg.Max1RM,
+				}
+
+				if err := tx.UpsertExerciseProgress(
+					ctx,
+					progress,
+				); err != nil {
+					return err
+				}
+			}
+
+			// Сохраняем сводку тренировки.
+			summary := &domain.WorkoutSummary{
+				WorkoutID:   event.WorkoutID,
+				UserID:      event.UserID,
+				Name:        event.Name,
+				Date:        event.Date,
+				TotalVolume: totalVolume,
+				SetCount:    event.SetsCount,
+			}
+
+			if err := tx.InsertWorkoutSummary(
+				ctx,
+				summary,
+			); err != nil {
+				return err
+			}
+
+			return nil
+		},
+	)
 	if err != nil {
-		logger.FromContext(ctx).Error().Err(err).Msg("failed to get user stats")
-		return err
-	}
-	if stats == nil {
-		stats = &domain.UserStats{UserID: event.UserID}
-	}
-	stats.TotalWorkouts++
-	stats.TotalVolume += totalVolume
-	if stats.TotalVolume > 0 && totalRepsAll > 0 {
-		stats.AvgIntensity = stats.TotalVolume / float64(totalRepsAll) // упрощённо: средний вес
-	}
-	// Здесь упрощённо; можно хранить сумму повторений для точности, но для MVP сойдёт.
-	if err := s.repo.UpsertUserStats(ctx, stats); err != nil {
-		logger.FromContext(ctx).Error().Err(err).Msg("failed to upsert user stats")
+		logger.FromContext(ctx).
+			Error().
+			Err(err).
+			Str("event_id", eventID).
+			Str("workout_id", event.WorkoutID).
+			Msg("failed to process workout created event")
+
 		return err
 	}
 
-	// 3. Обновляем exercise_progress для каждого упражнения
-	for exerciseID, agg := range exerciseAgg {
-		progress := &domain.ExerciseProgress{
-			UserID:        event.UserID,
-			ExerciseID:    exerciseID,
-			BestWeight:    agg.BestWeight,
-			TotalReps:     agg.TotalReps,
-			LastWorkoutAt: agg.LastDate,
-			Estimated1RM:  agg.Max1RM,
-		}
-		if err := s.repo.UpsertExerciseProgress(ctx, progress); err != nil {
-			logger.FromContext(ctx).Error().Err(err).Msg("failed to upsert exercise progress")
-			return err
-		}
+	if !applied {
+		logger.FromContext(ctx).
+			Info().
+			Str("event_id", eventID).
+			Str("workout_id", event.WorkoutID).
+			Msg("event already processed, skipping")
+
+		return nil
 	}
 
-	// 4. Вставляем сводку тренировки
-	summary := &domain.WorkoutSummary{
-		WorkoutID:   event.WorkoutID,
-		UserID:      event.UserID,
-		Name:        event.Name,
-		Date:        event.Date,
-		TotalVolume: totalVolume,
-		SetCount:    event.SetsCount,
-	}
-	if err := s.repo.InsertWorkoutSummary(ctx, summary); err != nil {
-		logger.FromContext(ctx).Error().Err(err).Msg("failed to insert workout summary")
-		return err
-	}
-
-	if err := s.repo.MarkEventProcessed(ctx, event.WorkoutID); err != nil {
-		logger.FromContext(ctx).Error().Err(err).Str("event_id", event.WorkoutID).Msg("failed to mark event processed")
-		return err
-	}
+	logger.FromContext(ctx).
+		Debug().
+		Str("event_id", eventID).
+		Str("workout_id", event.WorkoutID).
+		Msg("workout created event processed")
 
 	return nil
 }

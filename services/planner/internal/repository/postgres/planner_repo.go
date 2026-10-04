@@ -578,6 +578,285 @@ func (r *PlannerRepo) DeactivateActivePlans(ctx context.Context, userID string) 
 	return nil
 }
 
+type plannerEventTx struct {
+	tx pgx.Tx
+}
+
+// WithEventTransaction выполняет claim события и бизнес-изменения
+// в одной PostgreSQL-транзакции.
+func (r *PlannerRepo) WithEventTransaction(
+	ctx context.Context,
+	eventID string,
+	fn func(context.Context, repository.PlannerEventTx) error,
+) (bool, error) {
+	ctx, cancel := r.operationCtx(ctx)
+	defer cancel()
+
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return false, fmt.Errorf(
+			"begin event transaction: %w",
+			err,
+		)
+	}
+
+	defer func() {
+		rollbackCtx, rollbackCancel := r.operationCtx(
+			context.Background(),
+		)
+		defer rollbackCancel()
+
+		_ = tx.Rollback(rollbackCtx)
+	}()
+
+	query := `
+		INSERT INTO processed_events (event_id)
+		VALUES ($1)
+		ON CONFLICT (event_id) DO NOTHING
+	`
+
+	commandTag, err := tx.Exec(
+		ctx,
+		query,
+		eventID,
+	)
+	if err != nil {
+		return false, fmt.Errorf(
+			"claim processed event: %w",
+			err,
+		)
+	}
+
+	// Если INSERT ничего не добавил,
+	// такой event_id уже был успешно обработан.
+	if commandTag.RowsAffected() == 0 {
+		return false, nil
+	}
+
+	eventTx := &plannerEventTx{
+		tx: tx,
+	}
+
+	if err := fn(ctx, eventTx); err != nil {
+		return false, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return false, fmt.Errorf(
+			"commit event transaction: %w",
+			err,
+		)
+	}
+
+	return true, nil
+}
+
+func (t *plannerEventTx) GetActivePlanByUserID(
+	ctx context.Context,
+	userID string,
+) (*domain.TrainingPlan, error) {
+	query := `
+		SELECT
+			id,
+			user_id,
+			name,
+			goal,
+			experience_level,
+			start_date,
+			end_date,
+			status,
+			progression_rule,
+			created_at,
+			updated_at
+		FROM training_plans
+		WHERE user_id = $1
+		  AND status = 'active'
+		ORDER BY created_at DESC
+		LIMIT 1
+	`
+
+	plan := &domain.TrainingPlan{}
+
+	err := t.tx.QueryRow(
+		ctx,
+		query,
+		userID,
+	).Scan(
+		&plan.ID,
+		&plan.UserID,
+		&plan.Name,
+		&plan.Goal,
+		&plan.ExperienceLevel,
+		&plan.StartDate,
+		&plan.EndDate,
+		&plan.Status,
+		&plan.ProgressionRule,
+		&plan.CreatedAt,
+		&plan.UpdatedAt,
+	)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
+
+		return nil, fmt.Errorf(
+			"get active plan in event transaction: %w",
+			err,
+		)
+	}
+
+	return plan, nil
+}
+
+func (t *plannerEventTx) GetPlannedExercisesForDate(
+	ctx context.Context,
+	userID string,
+	date time.Time,
+) ([]domain.PlannedExercise, error) {
+	dayQuery := `
+		SELECT pd.id
+		FROM plan_days pd
+		JOIN plan_weeks pw
+			ON pd.week_id = pw.id
+		JOIN training_plans tp
+			ON pw.plan_id = tp.id
+		WHERE tp.user_id = $1
+		  AND tp.status = 'active'
+		  AND pd.date = $2
+		LIMIT 1
+	`
+
+	var dayID string
+
+	err := t.tx.QueryRow(
+		ctx,
+		dayQuery,
+		userID,
+		date,
+	).Scan(&dayID)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
+
+		return nil, fmt.Errorf(
+			"find planned day by date in event transaction: %w",
+			err,
+		)
+	}
+
+	exercisesQuery := `
+		SELECT
+			id,
+			day_id,
+			exercise_id,
+			target_sets,
+			target_reps_min,
+			target_reps_max,
+			target_weight,
+			target_rpe,
+			notes,
+			order_index,
+			created_at,
+			updated_at
+		FROM planned_exercises
+		WHERE day_id = $1
+		ORDER BY order_index
+	`
+
+	rows, err := t.tx.Query(
+		ctx,
+		exercisesQuery,
+		dayID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"list planned exercises in event transaction: %w",
+			err,
+		)
+	}
+	defer rows.Close()
+
+	var exercises []domain.PlannedExercise
+
+	for rows.Next() {
+		var exercise domain.PlannedExercise
+
+		if err := rows.Scan(
+			&exercise.ID,
+			&exercise.DayID,
+			&exercise.ExerciseID,
+			&exercise.TargetSets,
+			&exercise.TargetRepsMin,
+			&exercise.TargetRepsMax,
+			&exercise.TargetWeight,
+			&exercise.TargetRPE,
+			&exercise.Notes,
+			&exercise.OrderIndex,
+			&exercise.CreatedAt,
+			&exercise.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf(
+				"scan planned exercise in event transaction: %w",
+				err,
+			)
+		}
+
+		exercises = append(
+			exercises,
+			exercise,
+		)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf(
+			"iterate planned exercises in event transaction: %w",
+			err,
+		)
+	}
+
+	return exercises, nil
+}
+
+func (t *plannerEventTx) UpdatePlannedExercise(
+	ctx context.Context,
+	exercise *domain.PlannedExercise,
+) error {
+	query := `
+		UPDATE planned_exercises
+		SET target_sets = $2,
+		    target_reps_min = $3,
+		    target_reps_max = $4,
+		    target_weight = $5,
+		    target_rpe = $6,
+		    notes = $7,
+		    order_index = $8,
+		    updated_at = NOW()
+		WHERE id = $1
+	`
+
+	_, err := t.tx.Exec(
+		ctx,
+		query,
+		exercise.ID,
+		exercise.TargetSets,
+		exercise.TargetRepsMin,
+		exercise.TargetRepsMax,
+		exercise.TargetWeight,
+		exercise.TargetRPE,
+		exercise.Notes,
+		exercise.OrderIndex,
+	)
+	if err != nil {
+		return fmt.Errorf(
+			"update planned exercise in event transaction: %w",
+			err,
+		)
+	}
+
+	return nil
+}
+
 func (r *PlannerRepo) operationCtx(ctx context.Context) (context.Context, context.CancelFunc) {
 	if r.operationTimeout <= 0 {
 		return context.WithCancel(ctx)

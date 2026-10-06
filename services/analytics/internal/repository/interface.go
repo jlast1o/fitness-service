@@ -9,10 +9,22 @@ import (
 // AnalyticsEventTx описывает операции,
 // которые могут выполняться внутри транзакции обработки события.
 type AnalyticsEventTx interface {
-	GetUserStats(ctx context.Context, userID string) (*domain.UserStats, error)
-	UpsertUserStats(ctx context.Context, stats *domain.UserStats) error
-	UpsertExerciseProgress(ctx context.Context, progress *domain.ExerciseProgress) error
-	InsertWorkoutSummary(ctx context.Context, summary *domain.WorkoutSummary) error
+	AccumulateUserStats(
+		ctx context.Context,
+		userID string,
+		totalVolume float64,
+		totalReps int,
+	) error
+
+	MergeExerciseProgress(
+		ctx context.Context,
+		progress *domain.ExerciseProgress,
+	) error
+
+	InsertWorkoutSummary(
+		ctx context.Context,
+		summary *domain.WorkoutSummary,
+	) error
 }
 
 // AnalyticsRepository определяет контракт для работы с аналитикой.

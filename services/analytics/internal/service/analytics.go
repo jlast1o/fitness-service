@@ -89,31 +89,15 @@ func (s *AnalyticsService) ProcessWorkoutCreated(
 			ctx context.Context,
 			tx repository.AnalyticsEventTx,
 		) error {
-			// Обновляем агрегированную статистику пользователя.
-			stats, err := tx.GetUserStats(ctx, event.UserID)
-			if err != nil {
+			if err := tx.AccumulateUserStats(
+				ctx,
+				event.UserID,
+				totalVolume,
+				totalRepsAll,
+			); err != nil {
 				return err
 			}
 
-			if stats == nil {
-				stats = &domain.UserStats{
-					UserID: event.UserID,
-				}
-			}
-
-			stats.TotalWorkouts++
-			stats.TotalVolume += totalVolume
-
-			if stats.TotalVolume > 0 && totalRepsAll > 0 {
-				stats.AvgIntensity =
-					stats.TotalVolume / float64(totalRepsAll)
-			}
-
-			if err := tx.UpsertUserStats(ctx, stats); err != nil {
-				return err
-			}
-
-			// Обновляем прогресс по каждому упражнению.
 			for exerciseID, agg := range exerciseAgg {
 				progress := &domain.ExerciseProgress{
 					UserID:        event.UserID,
@@ -124,7 +108,7 @@ func (s *AnalyticsService) ProcessWorkoutCreated(
 					Estimated1RM:  agg.Max1RM,
 				}
 
-				if err := tx.UpsertExerciseProgress(
+				if err := tx.MergeExerciseProgress(
 					ctx,
 					progress,
 				); err != nil {
@@ -132,7 +116,6 @@ func (s *AnalyticsService) ProcessWorkoutCreated(
 				}
 			}
 
-			// Сохраняем сводку тренировки.
 			summary := &domain.WorkoutSummary{
 				WorkoutID:   event.WorkoutID,
 				UserID:      event.UserID,

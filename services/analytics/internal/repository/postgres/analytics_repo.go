@@ -27,47 +27,82 @@ func NewAnalyticsRepo(pool *pgxpool.Pool, operationTimeout time.Duration) reposi
 }
 
 // UpsertUserStats вставляет или обновляет агрегированную статистику пользователя.
-func (r *AnalyticsRepo) UpsertUserStats(ctx context.Context, stats *domain.UserStats) error {
+func (r *AnalyticsRepo) UpsertUserStats(
+	ctx context.Context,
+	stats *domain.UserStats,
+) error {
 	ctx, cancel := r.operationCtx(ctx)
 	defer cancel()
 
 	query := `
-		INSERT INTO user_stats (user_id, total_workouts, total_volume, avg_intensity, updated_at)
-		VALUES ($1, $2, $3, $4, NOW())
+		INSERT INTO user_stats (
+			user_id,
+			total_workouts,
+			total_volume,
+			total_reps,
+			avg_intensity,
+			updated_at
+		)
+		VALUES ($1, $2, $3, $4, $5, NOW())
 		ON CONFLICT (user_id)
 		DO UPDATE SET
 			total_workouts = EXCLUDED.total_workouts,
 			total_volume = EXCLUDED.total_volume,
+			total_reps = EXCLUDED.total_reps,
 			avg_intensity = EXCLUDED.avg_intensity,
 			updated_at = NOW()
 	`
-	_, err := r.pool.Exec(ctx, query,
+
+	_, err := r.pool.Exec(
+		ctx,
+		query,
 		stats.UserID,
 		stats.TotalWorkouts,
 		stats.TotalVolume,
+		stats.TotalReps,
 		stats.AvgIntensity,
 	)
 	if err != nil {
-		return fmt.Errorf("upsert user stats: %w", err)
+		return fmt.Errorf(
+			"upsert user stats: %w",
+			err,
+		)
 	}
+
 	return nil
 }
 
 // GetUserStats возвращает статистику пользователя по ID.
-func (r *AnalyticsRepo) GetUserStats(ctx context.Context, userID string) (*domain.UserStats, error) {
+func (r *AnalyticsRepo) GetUserStats(
+	ctx context.Context,
+	userID string,
+) (*domain.UserStats, error) {
 	ctx, cancel := r.operationCtx(ctx)
 	defer cancel()
 
 	query := `
-		SELECT user_id, total_workouts, total_volume, avg_intensity, updated_at
+		SELECT
+			user_id,
+			total_workouts,
+			total_volume,
+			total_reps,
+			avg_intensity,
+			updated_at
 		FROM user_stats
 		WHERE user_id = $1
 	`
+
 	stats := &domain.UserStats{}
-	err := r.pool.QueryRow(ctx, query, userID).Scan(
+
+	err := r.pool.QueryRow(
+		ctx,
+		query,
+		userID,
+	).Scan(
 		&stats.UserID,
 		&stats.TotalWorkouts,
 		&stats.TotalVolume,
+		&stats.TotalReps,
 		&stats.AvgIntensity,
 		&stats.UpdatedAt,
 	)
@@ -75,8 +110,13 @@ func (r *AnalyticsRepo) GetUserStats(ctx context.Context, userID string) (*domai
 		if err == pgx.ErrNoRows {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("get user stats: %w", err)
+
+		return nil, fmt.Errorf(
+			"get user stats: %w",
+			err,
+		)
 	}
+
 	return stats, nil
 }
 
@@ -292,61 +332,70 @@ func (r *AnalyticsRepo) WithEventTransaction(ctx context.Context, eventID string
 	return true, nil
 }
 
-func (t *analyticsEventTx) GetUserStats(ctx context.Context, userID string) (*domain.UserStats, error) {
-	query := ` SELECT user_id, total_workouts, total_volume, avg_intensity, updated_at
-		FROM user_stats
-		WHERE user_id = $1
-	`
-	stats := &domain.UserStats{}
-
-	err := t.tx.QueryRow(ctx, query, userID).Scan(&stats.UserID, &stats.TotalWorkouts, &stats.TotalVolume, &stats.AvgIntensity, &stats.UpdatedAt)
-
-	if err != nil {
-		if err == pgx.ErrNoRows {
-			return nil, nil
-		}
-
-		return nil, fmt.Errorf(
-			"get user stats in event transaction: %w",
-			err,
-		)
-	}
-
-	return stats, nil
-}
-
-func (t *analyticsEventTx) UpsertUserStats(
+func (t *analyticsEventTx) AccumulateUserStats(
 	ctx context.Context,
-	stats *domain.UserStats,
+	userID string,
+	totalVolume float64,
+	totalReps int,
 ) error {
 	query := `
 		INSERT INTO user_stats (
 			user_id,
 			total_workouts,
 			total_volume,
+			total_reps,
 			avg_intensity,
 			updated_at
 		)
-		VALUES ($1, $2, $3, $4, NOW())
+		VALUES (
+			$1,
+			1,
+			$2,
+			$3,
+			CASE
+				WHEN $3 > 0
+				THEN $2 / $3::numeric
+				ELSE 0
+			END,
+			NOW()
+		)
 		ON CONFLICT (user_id)
 		DO UPDATE SET
-			total_workouts = EXCLUDED.total_workouts,
-			total_volume = EXCLUDED.total_volume,
-			avg_intensity = EXCLUDED.avg_intensity,
+			total_workouts =
+				user_stats.total_workouts + 1,
+
+			total_volume =
+				user_stats.total_volume + EXCLUDED.total_volume,
+
+			total_reps =
+				user_stats.total_reps + EXCLUDED.total_reps,
+
+			avg_intensity =
+				CASE
+					WHEN user_stats.total_reps + EXCLUDED.total_reps > 0
+					THEN (
+						user_stats.total_volume +
+						EXCLUDED.total_volume
+					) / (
+						user_stats.total_reps +
+						EXCLUDED.total_reps
+					)::numeric
+					ELSE 0
+				END,
+
 			updated_at = NOW()
 	`
 
 	_, err := t.tx.Exec(
 		ctx,
 		query,
-		stats.UserID,
-		stats.TotalWorkouts,
-		stats.TotalVolume,
-		stats.AvgIntensity,
+		userID,
+		totalVolume,
+		totalReps,
 	)
 	if err != nil {
 		return fmt.Errorf(
-			"upsert user stats in event transaction: %w",
+			"accumulate user stats in event transaction: %w",
 			err,
 		)
 	}
@@ -354,7 +403,7 @@ func (t *analyticsEventTx) UpsertUserStats(
 	return nil
 }
 
-func (t *analyticsEventTx) UpsertExerciseProgress(
+func (t *analyticsEventTx) MergeExerciseProgress(
 	ctx context.Context,
 	progress *domain.ExerciseProgress,
 ) error {
@@ -368,13 +417,39 @@ func (t *analyticsEventTx) UpsertExerciseProgress(
 			estimated_1rm,
 			updated_at
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, NOW())
+		VALUES (
+			$1,
+			$2,
+			$3,
+			$4,
+			$5,
+			$6,
+			NOW()
+		)
 		ON CONFLICT (user_id, exercise_id)
 		DO UPDATE SET
-			best_weight = EXCLUDED.best_weight,
-			total_reps = EXCLUDED.total_reps,
-			last_workout_at = EXCLUDED.last_workout_at,
-			estimated_1rm = EXCLUDED.estimated_1rm,
+			best_weight = GREATEST(
+				exercise_progress.best_weight,
+				EXCLUDED.best_weight
+			),
+
+			total_reps =
+				exercise_progress.total_reps +
+				EXCLUDED.total_reps,
+
+			last_workout_at = GREATEST(
+				COALESCE(
+					exercise_progress.last_workout_at,
+					EXCLUDED.last_workout_at
+				),
+				EXCLUDED.last_workout_at
+			),
+
+			estimated_1rm = GREATEST(
+				exercise_progress.estimated_1rm,
+				EXCLUDED.estimated_1rm
+			),
+
 			updated_at = NOW()
 	`
 
@@ -390,7 +465,7 @@ func (t *analyticsEventTx) UpsertExerciseProgress(
 	)
 	if err != nil {
 		return fmt.Errorf(
-			"upsert exercise progress in event transaction: %w",
+			"merge exercise progress in event transaction: %w",
 			err,
 		)
 	}

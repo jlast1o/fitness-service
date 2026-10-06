@@ -7,6 +7,7 @@ type UserStats struct {
 	UserID        string    `json:"user_id"`
 	TotalWorkouts int       `json:"total_workouts"`
 	TotalVolume   float64   `json:"total_volume"`
+	TotalReps     int       `json:"total_reps"`
 	AvgIntensity  float64   `json:"avg_intensity"`
 	UpdatedAt     time.Time `json:"updated_at"`
 }

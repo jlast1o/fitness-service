@@ -145,14 +145,11 @@ func TestWithEventTransaction_DuplicateEvent(t *testing.T) {
 		) error {
 			callbackCalls++
 
-			return tx.UpsertUserStats(
+			return tx.AccumulateUserStats(
 				ctx,
-				&domain.UserStats{
-					UserID:        userID,
-					TotalWorkouts: 1,
-					TotalVolume:   100,
-					AvgIntensity:  50,
-				},
+				userID,
+				100,
+				2,
 			)
 		},
 	)
@@ -180,7 +177,7 @@ func TestWithEventTransaction_DuplicateEvent(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, applied)
 
-	// Callback второго события не должен был запуститься.
+	// Callback duplicate-события не должен был запуститься.
 	require.Equal(t, 1, callbackCalls)
 
 	var processedCount int
@@ -198,23 +195,40 @@ func TestWithEventTransaction_DuplicateEvent(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, processedCount)
 
-	var totalWorkouts int
+	var (
+		totalWorkouts int
+		totalVolume   float64
+		totalReps     int
+		avgIntensity  float64
+	)
 
 	err = pool.QueryRow(
 		ctx,
 		`
-			SELECT total_workouts
+			SELECT
+				total_workouts,
+				total_volume,
+				total_reps,
+				avg_intensity
 			FROM user_stats
 			WHERE user_id = $1
 		`,
 		userID,
-	).Scan(&totalWorkouts)
+	).Scan(
+		&totalWorkouts,
+		&totalVolume,
+		&totalReps,
+		&avgIntensity,
+	)
 
 	require.NoError(t, err)
 
 	// Главное доказательство:
-	// повторное событие не увеличило статистику ещё раз.
+	// duplicate не применил delta второй раз.
 	require.Equal(t, 1, totalWorkouts)
+	require.InDelta(t, 100, totalVolume, 0.001)
+	require.Equal(t, 2, totalReps)
+	require.InDelta(t, 50, avgIntensity, 0.001)
 }
 
 func TestWithEventTransaction_RollbackOnCallbackError(
@@ -245,14 +259,11 @@ func TestWithEventTransaction_RollbackOnCallbackError(
 			ctx context.Context,
 			tx repository.AnalyticsEventTx,
 		) error {
-			err := tx.UpsertUserStats(
+			err := tx.AccumulateUserStats(
 				ctx,
-				&domain.UserStats{
-					UserID:        userID,
-					TotalWorkouts: 99,
-					TotalVolume:   999,
-					AvgIntensity:  99,
-				},
+				userID,
+				999,
+				10,
 			)
 			if err != nil {
 				return err
@@ -284,7 +295,7 @@ func TestWithEventTransaction_RollbackOnCallbackError(
 	require.NoError(t, err)
 	require.Equal(t, 0, processedCount)
 
-	// Изменения user_stats тоже должны откатиться.
+	// user_stats тоже должен откатиться.
 	var statsCount int
 
 	err = pool.QueryRow(
@@ -300,9 +311,9 @@ func TestWithEventTransaction_RollbackOnCallbackError(
 	require.NoError(t, err)
 	require.Equal(t, 0, statsCount)
 
-	// Теперь повторяем тот же event_id.
-	// Так как первая транзакция откатилась,
-	// событие должно считаться новым.
+	// Повторяем тот же event_id.
+	// Первая транзакция откатилась,
+	// поэтому событие должно считаться новым.
 	applied, err = repo.WithEventTransaction(
 		ctx,
 		eventID,
@@ -310,14 +321,11 @@ func TestWithEventTransaction_RollbackOnCallbackError(
 			ctx context.Context,
 			tx repository.AnalyticsEventTx,
 		) error {
-			return tx.UpsertUserStats(
+			return tx.AccumulateUserStats(
 				ctx,
-				&domain.UserStats{
-					UserID:        userID,
-					TotalWorkouts: 1,
-					TotalVolume:   100,
-					AvgIntensity:  50,
-				},
+				userID,
+				100,
+				2,
 			)
 		},
 	)
@@ -325,20 +333,37 @@ func TestWithEventTransaction_RollbackOnCallbackError(
 	require.NoError(t, err)
 	require.True(t, applied)
 
-	var retryStatsCount int
+	var (
+		totalWorkouts int
+		totalVolume   float64
+		totalReps     int
+		avgIntensity  float64
+	)
 
 	err = pool.QueryRow(
 		ctx,
 		`
-			SELECT COUNT(*)
+			SELECT
+				total_workouts,
+				total_volume,
+				total_reps,
+				avg_intensity
 			FROM user_stats
 			WHERE user_id = $1
 		`,
 		userID,
-	).Scan(&retryStatsCount)
+	).Scan(
+		&totalWorkouts,
+		&totalVolume,
+		&totalReps,
+		&avgIntensity,
+	)
 
 	require.NoError(t, err)
-	require.Equal(t, 1, retryStatsCount)
+	require.Equal(t, 1, totalWorkouts)
+	require.InDelta(t, 100, totalVolume, 0.001)
+	require.Equal(t, 2, totalReps)
+	require.InDelta(t, 50, avgIntensity, 0.001)
 }
 
 func TestWithEventTransaction_ConcurrentDuplicate(
@@ -429,4 +454,369 @@ func TestWithEventTransaction_ConcurrentDuplicate(
 
 	require.NoError(t, err)
 	require.Equal(t, 1, processedCount)
+}
+
+func TestWithEventTransaction_ConcurrentDifferentEventsAccumulateStats(
+	t *testing.T,
+) {
+	pool := setupTestDB(t)
+
+	repo := postgres.NewAnalyticsRepo(
+		pool,
+		5*time.Second,
+	)
+
+	const (
+		eventID1 = "66666666-6666-6666-6666-666666666666"
+		eventID2 = "77777777-7777-7777-7777-777777777777"
+		userID   = "88888888-8888-8888-8888-888888888888"
+	)
+
+	ctx := context.Background()
+
+	// Барьер нужен, чтобы обе транзакции сначала
+	// получили свои разные event_id, а затем почти
+	// одновременно попытались изменить одного user.
+	ready := make(chan struct{}, 2)
+	start := make(chan struct{})
+
+	type result struct {
+		applied bool
+		err     error
+	}
+
+	resultCh := make(chan result, 2)
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	process := func(
+		eventID string,
+		volume float64,
+		reps int,
+	) {
+		defer wg.Done()
+
+		applied, err := repo.WithEventTransaction(
+			ctx,
+			eventID,
+			func(
+				ctx context.Context,
+				tx repository.AnalyticsEventTx,
+			) error {
+				ready <- struct{}{}
+
+				// Обе callback-функции ждут,
+				// пока main goroutine не отпустит их вместе.
+				<-start
+
+				return tx.AccumulateUserStats(
+					ctx,
+					userID,
+					volume,
+					reps,
+				)
+			},
+		)
+
+		resultCh <- result{
+			applied: applied,
+			err:     err,
+		}
+	}
+
+	go process(
+		eventID1,
+		1000,
+		20,
+	)
+
+	go process(
+		eventID2,
+		800,
+		10,
+	)
+
+	// Ждём, пока обе транзакции дойдут
+	// до точки непосредственно перед UPDATE.
+	<-ready
+	<-ready
+
+	close(start)
+
+	wg.Wait()
+	close(resultCh)
+
+	appliedCount := 0
+
+	for result := range resultCh {
+		require.NoError(t, result.err)
+
+		if result.applied {
+			appliedCount++
+		}
+	}
+
+	// event_id разные, поэтому примениться должны оба.
+	require.Equal(t, 2, appliedCount)
+
+	var (
+		totalWorkouts int
+		totalVolume   float64
+		totalReps     int
+		avgIntensity  float64
+	)
+
+	err := pool.QueryRow(
+		ctx,
+		`
+			SELECT
+				total_workouts,
+				total_volume,
+				total_reps,
+				avg_intensity
+			FROM user_stats
+			WHERE user_id = $1
+		`,
+		userID,
+	).Scan(
+		&totalWorkouts,
+		&totalVolume,
+		&totalReps,
+		&avgIntensity,
+	)
+
+	require.NoError(t, err)
+
+	// Event A:
+	// +1 workout, +1000 volume, +20 reps
+	//
+	// Event B:
+	// +1 workout, +800 volume, +10 reps
+	//
+	// Ожидаем сумму обеих delta,
+	// независимо от порядка транзакций.
+	require.Equal(t, 2, totalWorkouts)
+	require.InDelta(t, 1800, totalVolume, 0.001)
+	require.Equal(t, 30, totalReps)
+	require.InDelta(t, 60, avgIntensity, 0.001)
+
+	var processedCount int
+
+	err = pool.QueryRow(
+		ctx,
+		`
+			SELECT COUNT(*)
+			FROM processed_events
+			WHERE event_id IN ($1, $2)
+		`,
+		eventID1,
+		eventID2,
+	).Scan(&processedCount)
+
+	require.NoError(t, err)
+	require.Equal(t, 2, processedCount)
+}
+
+func TestWithEventTransaction_ConcurrentDifferentEventsMergeExerciseProgress(
+	t *testing.T,
+) {
+	pool := setupTestDB(t)
+
+	repo := postgres.NewAnalyticsRepo(
+		pool,
+		5*time.Second,
+	)
+
+	const (
+		eventID1   = "99999999-9999-9999-9999-999999999991"
+		eventID2   = "99999999-9999-9999-9999-999999999992"
+		userID     = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+		exerciseID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+	)
+
+	ctx := context.Background()
+
+	workoutDate1 := time.Date(
+		2026,
+		time.October,
+		1,
+		12,
+		0,
+		0,
+		0,
+		time.UTC,
+	)
+
+	workoutDate2 := time.Date(
+		2026,
+		time.October,
+		6,
+		12,
+		0,
+		0,
+		0,
+		time.UTC,
+	)
+
+	progress1 := domain.ExerciseProgress{
+		UserID:        userID,
+		ExerciseID:    exerciseID,
+		BestWeight:    100,
+		TotalReps:     30,
+		LastWorkoutAt: workoutDate1,
+		Estimated1RM:  120,
+	}
+
+	progress2 := domain.ExerciseProgress{
+		UserID:        userID,
+		ExerciseID:    exerciseID,
+		BestWeight:    90,
+		TotalReps:     20,
+		LastWorkoutAt: workoutDate2,
+		Estimated1RM:  105,
+	}
+
+	ready := make(chan struct{}, 2)
+	start := make(chan struct{})
+
+	type result struct {
+		applied bool
+		err     error
+	}
+
+	resultCh := make(chan result, 2)
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	process := func(
+		eventID string,
+		progress domain.ExerciseProgress,
+	) {
+		defer wg.Done()
+
+		applied, err := repo.WithEventTransaction(
+			ctx,
+			eventID,
+			func(
+				ctx context.Context,
+				tx repository.AnalyticsEventTx,
+			) error {
+				ready <- struct{}{}
+				<-start
+
+				return tx.MergeExerciseProgress(
+					ctx,
+					&progress,
+				)
+			},
+		)
+
+		resultCh <- result{
+			applied: applied,
+			err:     err,
+		}
+	}
+
+	go process(
+		eventID1,
+		progress1,
+	)
+
+	go process(
+		eventID2,
+		progress2,
+	)
+
+	// Обе разные транзакции готовы менять
+	// одну строку exercise_progress.
+	<-ready
+	<-ready
+
+	close(start)
+
+	wg.Wait()
+	close(resultCh)
+
+	appliedCount := 0
+
+	for result := range resultCh {
+		require.NoError(t, result.err)
+
+		if result.applied {
+			appliedCount++
+		}
+	}
+
+	require.Equal(t, 2, appliedCount)
+
+	var (
+		bestWeight    float64
+		totalReps     int
+		lastWorkoutAt time.Time
+		estimated1RM  float64
+	)
+
+	err := pool.QueryRow(
+		ctx,
+		`
+			SELECT
+				best_weight,
+				total_reps,
+				last_workout_at,
+				estimated_1rm
+			FROM exercise_progress
+			WHERE user_id = $1
+			  AND exercise_id = $2
+		`,
+		userID,
+		exerciseID,
+	).Scan(
+		&bestWeight,
+		&totalReps,
+		&lastWorkoutAt,
+		&estimated1RM,
+	)
+
+	require.NoError(t, err)
+
+	// Семантика merge:
+	//
+	// best_weight:
+	// MAX(100, 90) = 100
+	//
+	// total_reps:
+	// 30 + 20 = 50
+	//
+	// last_workout_at:
+	// MAX(Oct 1, Oct 6) = Oct 6
+	//
+	// estimated_1rm:
+	// MAX(120, 105) = 120
+	require.InDelta(t, 100, bestWeight, 0.001)
+	require.Equal(t, 50, totalReps)
+	require.WithinDuration(
+		t,
+		workoutDate2,
+		lastWorkoutAt,
+		time.Microsecond,
+	)
+	require.InDelta(t, 120, estimated1RM, 0.001)
+
+	var processedCount int
+
+	err = pool.QueryRow(
+		ctx,
+		`
+			SELECT COUNT(*)
+			FROM processed_events
+			WHERE event_id IN ($1, $2)
+		`,
+		eventID1,
+		eventID2,
+	).Scan(&processedCount)
+
+	require.NoError(t, err)
+	require.Equal(t, 2, processedCount)
 }

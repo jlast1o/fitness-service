@@ -12,4 +12,9 @@ CREATE TABLE training_plans (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_training_plans_user_id ON training_plans(user_id);
+CREATE INDEX idx_training_plans_user_id
+ON training_plans(user_id);
+
+CREATE UNIQUE INDEX idx_training_plans_one_active_per_user
+ON training_plans(user_id)
+WHERE status = 'active';

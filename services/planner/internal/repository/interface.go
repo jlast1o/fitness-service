@@ -110,10 +110,12 @@ type PlannerRepository interface {
 		to time.Time,
 	) ([]domain.WorkoutReminder, error)
 
-	// Работа с активными планами.
-	DeactivateActivePlans(
+	ReplaceActivePlan(
 		ctx context.Context,
-		userID string,
+		plan *domain.TrainingPlan,
+		weeks []domain.PlanWeek,
+		days []domain.PlanDay,
+		exercises []domain.PlannedExercise,
 	) error
 
 	// WithEventTransaction атомарно:

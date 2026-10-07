@@ -334,13 +334,18 @@ func (s *PlannerService) GenerateAndSavePlan(ctx context.Context, userID string,
 		return nil, err
 	}
 
-	if err := s.repo.DeactivateActivePlans(ctx, userID); err != nil {
-		logger.FromContext(ctx).Error().Err(err).Str("user_id", userID).Msg("failed to deactivate old plans")
-		return nil, err
-	}
+	if err := s.repo.ReplaceActivePlan(
+		ctx,
+		plan,
+		weeks,
+		days,
+		exercises,
+	); err != nil {
+		logger.FromContext(ctx).Error().
+			Err(err).
+			Str("user_id", userID).
+			Msg("failed to replace active plan")
 
-	if err := s.repo.CreatePlan(ctx, plan, weeks, days, exercises); err != nil {
-		logger.FromContext(ctx).Error().Err(err).Msg("failed to save generated plan")
 		return nil, err
 	}
 

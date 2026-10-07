@@ -528,3 +528,569 @@ func TestWithEventTransaction_ConcurrentDuplicate(
 	require.NoError(t, err)
 	require.Equal(t, 1, processedCount)
 }
+
+func seedPlannerUser(
+	t *testing.T,
+	repo repository.PlannerRepository,
+	userID string,
+) {
+	t.Helper()
+
+	err := repo.UpsertUserProfile(
+		context.Background(),
+		&domain.UserProfile{
+			UserID:          userID,
+			Goal:            "strength",
+			ExperienceLevel: "intermediate",
+			DaysPerWeek:     3,
+			Injuries:        map[string]any{},
+			Current1RM:      map[string]float64{},
+		},
+	)
+
+	require.NoError(t, err)
+}
+
+func makePlanGraph(
+	userID string,
+	name string,
+	startDate time.Time,
+	weekID string,
+	dayID string,
+	plannedExerciseID string,
+) (
+	*domain.TrainingPlan,
+	[]domain.PlanWeek,
+	[]domain.PlanDay,
+	[]domain.PlannedExercise,
+) {
+	plan := &domain.TrainingPlan{
+		UserID:          userID,
+		Name:            name,
+		Goal:            "strength",
+		ExperienceLevel: "intermediate",
+		StartDate:       startDate,
+		EndDate:         startDate.AddDate(0, 1, 0),
+		Status:          "active",
+		ProgressionRule: "linear",
+	}
+
+	weeks := []domain.PlanWeek{
+		{
+			ID:         weekID,
+			WeekNumber: 1,
+			Focus:      "volume",
+		},
+	}
+
+	days := []domain.PlanDay{
+		{
+			ID:        dayID,
+			WeekID:    weekID,
+			DayNumber: 1,
+			Date:      startDate,
+			Name:      "Day 1",
+		},
+	}
+
+	exercises := []domain.PlannedExercise{
+		{
+			ID:            plannedExerciseID,
+			DayID:         dayID,
+			ExerciseID:    "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+			TargetSets:    3,
+			TargetRepsMin: 5,
+			TargetRepsMax: 8,
+			TargetWeight:  100,
+			TargetRPE:     8,
+			Notes:         "",
+			OrderIndex:    1,
+		},
+	}
+
+	return plan, weeks, days, exercises
+}
+
+func TestReplaceActivePlan_Success(t *testing.T) {
+	pool := setupTestDB(t)
+
+	repo := postgres.NewPlannerRepo(
+		pool,
+		5*time.Second,
+	)
+
+	const userID = "11111111-1111-1111-1111-111111111111"
+
+	ctx := context.Background()
+
+	seedPlannerUser(
+		t,
+		repo,
+		userID,
+	)
+
+	startDate := time.Date(
+		2026,
+		time.October,
+		7,
+		0,
+		0,
+		0,
+		0,
+		time.UTC,
+	)
+
+	oldPlan, oldWeeks, oldDays, oldExercises := makePlanGraph(
+		userID,
+		"Old plan",
+		startDate,
+		"21111111-1111-1111-1111-111111111111",
+		"31111111-1111-1111-1111-111111111111",
+		"41111111-1111-1111-1111-111111111111",
+	)
+
+	err := repo.CreatePlan(
+		ctx,
+		oldPlan,
+		oldWeeks,
+		oldDays,
+		oldExercises,
+	)
+	require.NoError(t, err)
+
+	newPlan, newWeeks, newDays, newExercises := makePlanGraph(
+		userID,
+		"New plan",
+		startDate.AddDate(0, 1, 0),
+		"51111111-1111-1111-1111-111111111111",
+		"61111111-1111-1111-1111-111111111111",
+		"71111111-1111-1111-1111-111111111111",
+	)
+
+	err = repo.ReplaceActivePlan(
+		ctx,
+		newPlan,
+		newWeeks,
+		newDays,
+		newExercises,
+	)
+	require.NoError(t, err)
+
+	var oldStatus string
+
+	err = pool.QueryRow(
+		ctx,
+		`
+			SELECT status
+			FROM training_plans
+			WHERE id = $1
+		`,
+		oldPlan.ID,
+	).Scan(&oldStatus)
+
+	require.NoError(t, err)
+	require.Equal(t, "completed", oldStatus)
+
+	var newStatus string
+
+	err = pool.QueryRow(
+		ctx,
+		`
+			SELECT status
+			FROM training_plans
+			WHERE id = $1
+		`,
+		newPlan.ID,
+	).Scan(&newStatus)
+
+	require.NoError(t, err)
+	require.Equal(t, "active", newStatus)
+
+	var activeCount int
+
+	err = pool.QueryRow(
+		ctx,
+		`
+			SELECT COUNT(*)
+			FROM training_plans
+			WHERE user_id = $1
+			  AND status = 'active'
+		`,
+		userID,
+	).Scan(&activeCount)
+
+	require.NoError(t, err)
+	require.Equal(t, 1, activeCount)
+
+	var weekCount int
+
+	err = pool.QueryRow(
+		ctx,
+		`
+			SELECT COUNT(*)
+			FROM plan_weeks
+			WHERE plan_id = $1
+		`,
+		newPlan.ID,
+	).Scan(&weekCount)
+
+	require.NoError(t, err)
+	require.Equal(t, 1, weekCount)
+
+	var dayCount int
+
+	err = pool.QueryRow(
+		ctx,
+		`
+			SELECT COUNT(*)
+			FROM plan_days pd
+			JOIN plan_weeks pw
+				ON pd.week_id = pw.id
+			WHERE pw.plan_id = $1
+		`,
+		newPlan.ID,
+	).Scan(&dayCount)
+
+	require.NoError(t, err)
+	require.Equal(t, 1, dayCount)
+
+	var exerciseCount int
+
+	err = pool.QueryRow(
+		ctx,
+		`
+			SELECT COUNT(*)
+			FROM planned_exercises pe
+			JOIN plan_days pd
+				ON pe.day_id = pd.id
+			JOIN plan_weeks pw
+				ON pd.week_id = pw.id
+			WHERE pw.plan_id = $1
+		`,
+		newPlan.ID,
+	).Scan(&exerciseCount)
+
+	require.NoError(t, err)
+	require.Equal(t, 1, exerciseCount)
+}
+
+func TestReplaceActivePlan_RollbackOnCreateFailure(
+	t *testing.T,
+) {
+	pool := setupTestDB(t)
+
+	repo := postgres.NewPlannerRepo(
+		pool,
+		5*time.Second,
+	)
+
+	const userID = "12222222-2222-2222-2222-222222222222"
+
+	ctx := context.Background()
+
+	seedPlannerUser(
+		t,
+		repo,
+		userID,
+	)
+
+	startDate := time.Date(
+		2026,
+		time.October,
+		7,
+		0,
+		0,
+		0,
+		0,
+		time.UTC,
+	)
+
+	oldPlan, oldWeeks, oldDays, oldExercises := makePlanGraph(
+		userID,
+		"Old plan",
+		startDate,
+		"22222222-2222-2222-2222-222222222221",
+		"32222222-2222-2222-2222-222222222222",
+		"42222222-2222-2222-2222-222222222222",
+	)
+
+	err := repo.CreatePlan(
+		ctx,
+		oldPlan,
+		oldWeeks,
+		oldDays,
+		oldExercises,
+	)
+	require.NoError(t, err)
+
+	// Намеренно используем тот же week ID.
+	//
+	// Новый training_plan успеет INSERT-нуться,
+	// старый active plan успеет стать completed,
+	// но INSERT plan_weeks упадёт по PRIMARY KEY.
+	//
+	// После этого вся ReplaceActivePlan должна
+	// откатиться целиком.
+	newPlan, newWeeks, newDays, newExercises := makePlanGraph(
+		userID,
+		"Broken new plan",
+		startDate.AddDate(0, 1, 0),
+		oldWeeks[0].ID,
+		"62222222-2222-2222-2222-222222222222",
+		"72222222-2222-2222-2222-222222222222",
+	)
+
+	err = repo.ReplaceActivePlan(
+		ctx,
+		newPlan,
+		newWeeks,
+		newDays,
+		newExercises,
+	)
+	require.Error(t, err)
+
+	var oldStatus string
+
+	err = pool.QueryRow(
+		ctx,
+		`
+			SELECT status
+			FROM training_plans
+			WHERE id = $1
+		`,
+		oldPlan.ID,
+	).Scan(&oldStatus)
+
+	require.NoError(t, err)
+
+	// Самая важная проверка:
+	// UPDATE active -> completed тоже откатился.
+	require.Equal(t, "active", oldStatus)
+
+	var planCount int
+
+	err = pool.QueryRow(
+		ctx,
+		`
+			SELECT COUNT(*)
+			FROM training_plans
+			WHERE user_id = $1
+		`,
+		userID,
+	).Scan(&planCount)
+
+	require.NoError(t, err)
+
+	// Новый training_plan был INSERT-нут внутри tx,
+	// но после ошибки week INSERT должен исчезнуть.
+	require.Equal(t, 1, planCount)
+
+	var activeCount int
+
+	err = pool.QueryRow(
+		ctx,
+		`
+			SELECT COUNT(*)
+			FROM training_plans
+			WHERE user_id = $1
+			  AND status = 'active'
+		`,
+		userID,
+	).Scan(&activeCount)
+
+	require.NoError(t, err)
+	require.Equal(t, 1, activeCount)
+}
+
+func TestReplaceActivePlan_ConcurrentReplacements(
+	t *testing.T,
+) {
+	pool := setupTestDB(t)
+
+	repo := postgres.NewPlannerRepo(
+		pool,
+		5*time.Second,
+	)
+
+	const userID = "13333333-3333-3333-3333-333333333333"
+
+	ctx := context.Background()
+
+	seedPlannerUser(
+		t,
+		repo,
+		userID,
+	)
+
+	startDate := time.Date(
+		2026,
+		time.October,
+		7,
+		0,
+		0,
+		0,
+		0,
+		time.UTC,
+	)
+
+	oldPlan, oldWeeks, oldDays, oldExercises := makePlanGraph(
+		userID,
+		"Initial plan",
+		startDate,
+		"23333333-3333-3333-3333-333333333331",
+		"33333333-3333-3333-3333-333333333331",
+		"43333333-3333-3333-3333-333333333331",
+	)
+
+	err := repo.CreatePlan(
+		ctx,
+		oldPlan,
+		oldWeeks,
+		oldDays,
+		oldExercises,
+	)
+	require.NoError(t, err)
+
+	planA, weeksA, daysA, exercisesA := makePlanGraph(
+		userID,
+		"Concurrent plan A",
+		startDate.AddDate(0, 1, 0),
+		"53333333-3333-3333-3333-333333333331",
+		"63333333-3333-3333-3333-333333333331",
+		"73333333-3333-3333-3333-333333333331",
+	)
+
+	planB, weeksB, daysB, exercisesB := makePlanGraph(
+		userID,
+		"Concurrent plan B",
+		startDate.AddDate(0, 2, 0),
+		"53333333-3333-3333-3333-333333333332",
+		"63333333-3333-3333-3333-333333333332",
+		"73333333-3333-3333-3333-333333333332",
+	)
+
+	start := make(chan struct{})
+
+	errCh := make(chan error, 2)
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+
+		<-start
+
+		errCh <- repo.ReplaceActivePlan(
+			ctx,
+			planA,
+			weeksA,
+			daysA,
+			exercisesA,
+		)
+	}()
+
+	go func() {
+		defer wg.Done()
+
+		<-start
+
+		errCh <- repo.ReplaceActivePlan(
+			ctx,
+			planB,
+			weeksB,
+			daysB,
+			exercisesB,
+		)
+	}()
+
+	// Оба запроса начинают replacement почти одновременно.
+	close(start)
+
+	wg.Wait()
+	close(errCh)
+
+	for err := range errCh {
+		require.NoError(t, err)
+	}
+
+	var activeCount int
+
+	err = pool.QueryRow(
+		ctx,
+		`
+			SELECT COUNT(*)
+			FROM training_plans
+			WHERE user_id = $1
+			  AND status = 'active'
+		`,
+		userID,
+	).Scan(&activeCount)
+
+	require.NoError(t, err)
+
+	// Инвариант:
+	// даже после двух concurrent replacement
+	// active plan может быть только один.
+	require.Equal(t, 1, activeCount)
+
+	var totalPlans int
+
+	err = pool.QueryRow(
+		ctx,
+		`
+			SELECT COUNT(*)
+			FROM training_plans
+			WHERE user_id = $1
+		`,
+		userID,
+	).Scan(&totalPlans)
+
+	require.NoError(t, err)
+
+	// Initial + A + B.
+	// Оба replacement успешно выполнились последовательно.
+	require.Equal(t, 3, totalPlans)
+
+	var completedCount int
+
+	err = pool.QueryRow(
+		ctx,
+		`
+			SELECT COUNT(*)
+			FROM training_plans
+			WHERE user_id = $1
+			  AND status = 'completed'
+		`,
+		userID,
+	).Scan(&completedCount)
+
+	require.NoError(t, err)
+
+	require.Equal(t, 2, completedCount)
+
+	var activeName string
+
+	err = pool.QueryRow(
+		ctx,
+		`
+			SELECT name
+			FROM training_plans
+			WHERE user_id = $1
+			  AND status = 'active'
+		`,
+		userID,
+	).Scan(&activeName)
+
+	require.NoError(t, err)
+
+	// Кто захватил lock последним — тот и останется active.
+	require.Contains(
+		t,
+		[]string{
+			"Concurrent plan A",
+			"Concurrent plan B",
+		},
+		activeName,
+	)
+}

@@ -152,7 +152,8 @@ func (r *PlannerRepo) GetAvailableExerciseByID(ctx context.Context, exerciseID s
 	return exercise, nil
 }
 
-// CreatePlan создаёт план вместе с неделями, днями и упражнениями в одной транзакции.
+// CreatePlan создаёт план вместе с неделями, днями и упражнениями
+// в одной PostgreSQL-транзакции.
 func (r *PlannerRepo) CreatePlan(
 	ctx context.Context,
 	plan *domain.TrainingPlan,
@@ -165,76 +166,37 @@ func (r *PlannerRepo) CreatePlan(
 
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
-		return fmt.Errorf("begin transaction: %w", err)
+		return fmt.Errorf("begin create plan transaction: %w", err)
 	}
 
 	defer func() {
-		rollbackCtx, rollbackCancel := r.operationCtx(context.Background())
+		rollbackCtx, rollbackCancel := r.operationCtx(
+			context.Background(),
+		)
 		defer rollbackCancel()
 
 		_ = tx.Rollback(rollbackCtx)
 	}()
 
-	// Вставляем план (здесь ID по-прежнему генерируется базой)
-	planQuery := `
-		INSERT INTO training_plans (user_id, name, goal, experience_level, start_date, end_date, status, progression_rule)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-		RETURNING id, created_at, updated_at
-	`
-	err = tx.QueryRow(ctx, planQuery,
-		plan.UserID, plan.Name, plan.Goal, plan.ExperienceLevel,
-		plan.StartDate, plan.EndDate, plan.Status, plan.ProgressionRule,
-	).Scan(&plan.ID, &plan.CreatedAt, &plan.UpdatedAt)
-	if err != nil {
-		return fmt.Errorf("insert training plan: %w", err)
+	if err := createPlanTx(
+		ctx,
+		tx,
+		plan,
+		weeks,
+		days,
+		exercises,
+	); err != nil {
+		return err
 	}
 
-	// Вставляем недели с уже сгенерированными ID
-	for _, week := range weeks {
-		week.PlanID = plan.ID
-		query := `
-			INSERT INTO plan_weeks (id, plan_id, week_number, focus)
-			VALUES ($1, $2, $3, $4)
-		`
-		if _, err := tx.Exec(ctx, query, week.ID, week.PlanID, week.WeekNumber, week.Focus); err != nil {
-			return fmt.Errorf("insert plan week: %w", err)
-		}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf(
+			"commit create plan transaction: %w",
+			err,
+		)
 	}
 
-	// Вставляем дни с уже сгенерированными ID и WeekID
-	for _, day := range days {
-		query := `
-			INSERT INTO plan_days (id, week_id, day_number, date, name)
-			VALUES ($1, $2, $3, $4, $5)
-		`
-		if _, err := tx.Exec(ctx, query, day.ID, day.WeekID, day.DayNumber, day.Date, day.Name); err != nil {
-			return fmt.Errorf("insert plan day: %w", err)
-		}
-	}
-
-	// Вставляем запланированные упражнения с уже сгенерированными ID и DayID
-	for _, exercise := range exercises {
-		query := `
-			INSERT INTO planned_exercises (id, day_id, exercise_id, target_sets, target_reps_min, target_reps_max, target_weight, target_rpe, notes, order_index)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-		`
-		if _, err := tx.Exec(ctx, query,
-			exercise.ID,
-			exercise.DayID,
-			exercise.ExerciseID,
-			exercise.TargetSets,
-			exercise.TargetRepsMin,
-			exercise.TargetRepsMax,
-			exercise.TargetWeight,
-			exercise.TargetRPE,
-			exercise.Notes,
-			exercise.OrderIndex,
-		); err != nil {
-			return fmt.Errorf("insert planned exercise: %w", err)
-		}
-	}
-
-	return tx.Commit(ctx)
+	return nil
 }
 
 // GetPlanByID возвращает план по ID.
@@ -268,6 +230,246 @@ func (r *PlannerRepo) GetPlanByID(ctx context.Context, planID string) (*domain.T
 		return nil, fmt.Errorf("get plan by id: %w", err)
 	}
 	return plan, nil
+}
+
+func createPlanTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	plan *domain.TrainingPlan,
+	weeks []domain.PlanWeek,
+	days []domain.PlanDay,
+	exercises []domain.PlannedExercise,
+) error {
+	planQuery := `
+		INSERT INTO training_plans (
+			user_id,
+			name,
+			goal,
+			experience_level,
+			start_date,
+			end_date,
+			status,
+			progression_rule
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		RETURNING id, created_at, updated_at
+	`
+
+	err := tx.QueryRow(
+		ctx,
+		planQuery,
+		plan.UserID,
+		plan.Name,
+		plan.Goal,
+		plan.ExperienceLevel,
+		plan.StartDate,
+		plan.EndDate,
+		plan.Status,
+		plan.ProgressionRule,
+	).Scan(
+		&plan.ID,
+		&plan.CreatedAt,
+		&plan.UpdatedAt,
+	)
+	if err != nil {
+		return fmt.Errorf(
+			"insert training plan: %w",
+			err,
+		)
+	}
+
+	for _, week := range weeks {
+		week.PlanID = plan.ID
+
+		query := `
+			INSERT INTO plan_weeks (
+				id,
+				plan_id,
+				week_number,
+				focus
+			)
+			VALUES ($1, $2, $3, $4)
+		`
+
+		_, err := tx.Exec(
+			ctx,
+			query,
+			week.ID,
+			week.PlanID,
+			week.WeekNumber,
+			week.Focus,
+		)
+		if err != nil {
+			return fmt.Errorf(
+				"insert plan week: %w",
+				err,
+			)
+		}
+	}
+
+	for _, day := range days {
+		query := `
+			INSERT INTO plan_days (
+				id,
+				week_id,
+				day_number,
+				date,
+				name
+			)
+			VALUES ($1, $2, $3, $4, $5)
+		`
+
+		_, err := tx.Exec(
+			ctx,
+			query,
+			day.ID,
+			day.WeekID,
+			day.DayNumber,
+			day.Date,
+			day.Name,
+		)
+		if err != nil {
+			return fmt.Errorf(
+				"insert plan day: %w",
+				err,
+			)
+		}
+	}
+
+	for _, exercise := range exercises {
+		query := `
+			INSERT INTO planned_exercises (
+				id,
+				day_id,
+				exercise_id,
+				target_sets,
+				target_reps_min,
+				target_reps_max,
+				target_weight,
+				target_rpe,
+				notes,
+				order_index
+			)
+			VALUES (
+				$1, $2, $3, $4, $5,
+				$6, $7, $8, $9, $10
+			)
+		`
+
+		_, err := tx.Exec(
+			ctx,
+			query,
+			exercise.ID,
+			exercise.DayID,
+			exercise.ExerciseID,
+			exercise.TargetSets,
+			exercise.TargetRepsMin,
+			exercise.TargetRepsMax,
+			exercise.TargetWeight,
+			exercise.TargetRPE,
+			exercise.Notes,
+			exercise.OrderIndex,
+		)
+		if err != nil {
+			return fmt.Errorf(
+				"insert planned exercise: %w",
+				err,
+			)
+		}
+	}
+
+	return nil
+}
+
+func (r *PlannerRepo) ReplaceActivePlan(
+	ctx context.Context,
+	plan *domain.TrainingPlan,
+	weeks []domain.PlanWeek,
+	days []domain.PlanDay,
+	exercises []domain.PlannedExercise,
+) error {
+	ctx, cancel := r.operationCtx(ctx)
+	defer cancel()
+
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf(
+			"begin replace active plan transaction: %w",
+			err,
+		)
+	}
+
+	defer func() {
+		rollbackCtx, rollbackCancel := r.operationCtx(
+			context.Background(),
+		)
+		defer rollbackCancel()
+
+		_ = tx.Rollback(rollbackCtx)
+	}()
+
+	// Блокируем профиль конкретного пользователя.
+	// Две параллельные замены плана одного user будут
+	// выполняться последовательно.
+	var lockedUserID string
+
+	err = tx.QueryRow(
+		ctx,
+		`
+			SELECT user_id
+			FROM user_profiles
+			WHERE user_id = $1
+			FOR UPDATE
+		`,
+		plan.UserID,
+	).Scan(&lockedUserID)
+	if err != nil {
+		return fmt.Errorf(
+			"lock user profile for plan replacement: %w",
+			err,
+		)
+	}
+
+	// Старый active plan становится completed.
+	_, err = tx.Exec(
+		ctx,
+		`
+			UPDATE training_plans
+			SET
+				status = 'completed',
+				updated_at = NOW()
+			WHERE user_id = $1
+			  AND status = 'active'
+		`,
+		plan.UserID,
+	)
+	if err != nil {
+		return fmt.Errorf(
+			"deactivate active plan: %w",
+			err,
+		)
+	}
+
+	// Новый план создаётся В ЭТОЙ ЖЕ tx.
+	if err := createPlanTx(
+		ctx,
+		tx,
+		plan,
+		weeks,
+		days,
+		exercises,
+	); err != nil {
+		return err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf(
+			"commit replace active plan transaction: %w",
+			err,
+		)
+	}
+
+	return nil
 }
 
 // GetActivePlanByUserID возвращает активный план пользователя.
@@ -566,16 +768,6 @@ func (r *PlannerRepo) GetUpcomingWorkouts(ctx context.Context, from, to time.Tim
 		})
 	}
 	return reminders, rows.Err()
-}
-func (r *PlannerRepo) DeactivateActivePlans(ctx context.Context, userID string) error {
-	ctx, cancel := r.operationCtx(ctx)
-	defer cancel()
-
-	_, err := r.pool.Exec(ctx, `UPDATE training_plans SET status = 'completed', updated_at = NOW() WHERE user_id = $1 AND status = 'active'`, userID)
-	if err != nil {
-		return fmt.Errorf("deactivate active plans: %w", err)
-	}
-	return nil
 }
 
 type plannerEventTx struct {

@@ -5,6 +5,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/kelseyhightower/envconfig"
 	"github.com/redis/go-redis/v9"
 
 	"fitness-platform/pkg/logger"
@@ -15,9 +16,27 @@ import (
 	"fitness-platform/services/notification/internal/worker"
 )
 
+type consumerRecoveryConfig struct {
+	ClaimMinIdle time.Duration `envconfig:"REDIS_CONSUMER_CLAIM_MIN_IDLE" default:"30s"`
+	ClaimCount   int64         `envconfig:"REDIS_CONSUMER_CLAIM_COUNT" default:"10"`
+}
+
 func main() {
 	// 1. Инициализация логгера
 	logger.Init("notification", "info")
+
+	var recoveryCfg consumerRecoveryConfig
+
+	if err := envconfig.Process("", &recoveryCfg); err != nil {
+		logger.Log.Fatal().
+			Err(err).
+			Msg("failed to load consumer recovery config")
+	}
+
+	if recoveryCfg.ClaimMinIdle <= 0 || recoveryCfg.ClaimCount <= 0 {
+		logger.Log.Fatal().
+			Msg("invalid redis consumer recovery configuration")
+	}
 
 	// 2. Читаем конфигурацию из переменных окружения
 	redisAddr := os.Getenv("REDIS_ADDR")
@@ -59,6 +78,8 @@ func main() {
 		"notification-group",
 		"notification-consumer-1",
 		pool,
+		recoveryCfg.ClaimMinIdle,
+		recoveryCfg.ClaimCount,
 	)
 	go redisConsumer.Run(ctx)
 

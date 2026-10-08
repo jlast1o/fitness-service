@@ -25,6 +25,9 @@ type Config struct {
 	RedisReadTimeout  time.Duration `envconfig:"REDIS_READ_TIMEOUT" default:"500ms"`
 	RedisWriteTimeout time.Duration `envconfig:"REDIS_WRITE_TIMEOUT" default:"500ms"`
 
+	RedisConsumerClaimMinIdle time.Duration `envconfig:"REDIS_CONSUMER_CLAIM_MIN_IDLE" default:"30s"`
+	RedisConsumerClaimCount   int64         `envconfig:"REDIS_CONSUMER_CLAIM_COUNT" default:"10"`
+
 	RedisCacheTimeout time.Duration `envconfig:"REDIS_CACHE_TIMEOUT" default:"750ms"`
 
 	RedisMaxRetries  int `envconfig:"REDIS_MAX_RETRIES" default:"-1"` // отключаем автоматические повторные попытки, чтобы не блокировать обработку запросов

@@ -84,6 +84,8 @@ func main() {
 		"planner-group",
 		"planner-consumer-1",
 		plannerService,
+		cfg.RedisConsumerClaimMinIdle,
+		cfg.RedisConsumerClaimCount,
 	)
 
 	var wg sync.WaitGroup

@@ -96,6 +96,8 @@ func main() {
 		"analytics-group",      // группа потребителей
 		"analytics-consumer-1", // имя потребителя
 		analyticsService,
+		cfg.RedisConsumerClaimMinIdle,
+		cfg.RedisConsumerClaimCount,
 	)
 
 	var wg sync.WaitGroup

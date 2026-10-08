@@ -23,6 +23,10 @@ type RedisConsumer struct {
 	group       string
 	consumer    string
 	analytics   *service.AnalyticsService
+
+	claimMinIdle time.Duration
+	claimCount   int64
+	claimStart   string
 }
 
 // NewRedisConsumer создаёт нового потребителя.
@@ -32,13 +36,18 @@ func NewRedisConsumer(
 	group,
 	consumerName string,
 	analytics *service.AnalyticsService,
+	claimMinIdle time.Duration,
+	claimCount int64,
 ) *RedisConsumer {
 	return &RedisConsumer{
-		redisClient: redisClient,
-		stream:      stream,
-		group:       group,
-		consumer:    consumerName,
-		analytics:   analytics,
+		redisClient:  redisClient,
+		stream:       stream,
+		group:        group,
+		consumer:     consumerName,
+		analytics:    analytics,
+		claimMinIdle: claimMinIdle,
+		claimCount:   claimCount,
+		claimStart:   "0-0",
 	}
 }
 
@@ -70,14 +79,44 @@ func (c *RedisConsumer) Run(ctx context.Context) {
 			return
 
 		default:
+			c.recoverPendingBatch(ctx)
 			c.processBatch(ctx)
 			time.Sleep(1 * time.Second)
 		}
 	}
 }
 
+func (c *RedisConsumer) recoverPendingBatch(ctx context.Context) {
+	messages, nextStart, err := c.redisClient.XAutoClaim(ctx,
+		&redis.XAutoClaimArgs{
+			Stream:   c.stream,
+			Group:    c.group,
+			Consumer: c.consumer,
+			MinIdle:  c.claimMinIdle,
+			Start:    c.claimStart,
+			Count:    c.claimCount,
+		},
+	).Result()
+
+	if err != nil {
+		logger.Log.Error().Err(err).Str("claim_start", c.claimStart).Msg("failed to recovery pending redis messages")
+	}
+
+	c.claimStart = nextStart
+
+	if len(messages) == 0 {
+		return
+	}
+
+	logger.Log.Info().Int("count", len(messages)).Msg("recovered pending redis messages")
+
+	c.processMessages(ctx, messages)
+}
+
 // processBatch читает пачку сообщений и обрабатывает их.
-func (c *RedisConsumer) processBatch(ctx context.Context) {
+func (c *RedisConsumer) processBatch(
+	ctx context.Context,
+) {
 	streams, err := c.redisClient.XReadGroup(
 		ctx,
 		&redis.XReadGroupArgs{
@@ -102,84 +141,100 @@ func (c *RedisConsumer) processBatch(ctx context.Context) {
 	}
 
 	for _, stream := range streams {
-		for _, message := range stream.Messages {
-			envelope, err := parseEnvelope(message.Values)
-			if err != nil {
+		c.processMessages(
+			ctx,
+			stream.Messages,
+		)
+	}
+}
+
+func (c *RedisConsumer) processMessages(
+	ctx context.Context,
+	messages []redis.XMessage,
+) {
+	for _, message := range messages {
+		envelope, err := parseEnvelope(message.Values)
+		if err != nil {
+			logger.Log.Error().
+				Err(err).
+				Str("redis_message_id", message.ID).
+				Msg("failed to parse event envelope")
+
+			c.ackMessage(ctx, message.ID)
+			continue
+		}
+
+		if envelope.EventVersion != events.Version1 {
+			logger.Log.Error().
+				Str("event_id", envelope.EventID).
+				Str("event_type", envelope.EventType).
+				Int("event_version", envelope.EventVersion).
+				Msg("unsupported event version")
+
+			c.ackMessage(ctx, message.ID)
+			continue
+		}
+
+		switch envelope.EventType {
+		case events.TypeWorkoutCreated:
+			var workoutEvent domain.WorkoutCreatedEvent
+
+			if err := json.Unmarshal(
+				envelope.Payload,
+				&workoutEvent,
+			); err != nil {
 				logger.Log.Error().
 					Err(err).
+					Str("event_id", envelope.EventID).
 					Str("redis_message_id", message.ID).
-					Msg("failed to parse event envelope")
+					Msg("failed to unmarshal workout.created payload")
 
 				c.ackMessage(ctx, message.ID)
 				continue
 			}
 
-			if envelope.EventVersion != events.Version1 {
+			if err := c.analytics.ProcessWorkoutCreated(
+				ctx,
+				envelope.EventID,
+				workoutEvent,
+			); err != nil {
 				logger.Log.Error().
+					Err(err).
 					Str("event_id", envelope.EventID).
-					Str("event_type", envelope.EventType).
-					Int("event_version", envelope.EventVersion).
-					Msg("unsupported event version")
+					Str("redis_message_id", message.ID).
+					Msg("failed to process workout.created event")
 
-				c.ackMessage(ctx, message.ID)
+				// ACK не делаем.
+				// После claimMinIdle сообщение снова
+				// сможет быть поднято через XAUTOCLAIM.
 				continue
 			}
 
-			switch envelope.EventType {
-			case events.TypeWorkoutCreated:
-				var workoutEvent domain.WorkoutCreatedEvent
+			c.ackMessage(
+				ctx,
+				message.ID,
+			)
 
-				if err := json.Unmarshal(
-					envelope.Payload,
-					&workoutEvent,
-				); err != nil {
-					logger.Log.Error().
-						Err(err).
-						Str("event_id", envelope.EventID).
-						Str("redis_message_id", message.ID).
-						Msg("failed to unmarshal workout.created payload")
+		case events.TypeWorkoutUpdated:
+			logger.Log.Debug().
+				Str("event_id", envelope.EventID).
+				Msg("workout.updated is not handled by analytics")
 
-					c.ackMessage(ctx, message.ID)
-					continue
-				}
+			c.ackMessage(
+				ctx,
+				message.ID,
+			)
 
-				if err := c.analytics.ProcessWorkoutCreated(
-					ctx,
-					envelope.EventID,
-					workoutEvent,
-				); err != nil {
-					logger.Log.Error().
-						Err(err).
-						Str("event_id", envelope.EventID).
-						Str("redis_message_id", message.ID).
-						Msg("failed to process workout.created event")
+		default:
+			logger.Log.Debug().
+				Str("event_id", envelope.EventID).
+				Str("event_type", envelope.EventType).
+				Msg("event type is not handled by analytics")
 
-					// ACK не делаем.
-					// Сообщение остаётся pending для будущего recovery.
-					continue
-				}
-
-				c.ackMessage(ctx, message.ID)
-
-			case events.TypeWorkoutUpdated:
-				// Analytics пока не умеет корректно пересчитывать
-				// статистику при изменении уже существующей тренировки.
-				logger.Log.Debug().
-					Str("event_id", envelope.EventID).
-					Msg("workout.updated is not handled by analytics")
-
-				// Повторная доставка ничего не изменит,
-				// поэтому не оставляем сообщение pending.
-				c.ackMessage(ctx, message.ID)
-
-			default:
-				logger.Log.Debug().
-					Str("event_id", envelope.EventID).
-					Str("event_type", envelope.EventType).
-					Msg("event type is not handled by analytics")
-
-				c.ackMessage(ctx, message.ID)
-			}
+			c.ackMessage(
+				ctx,
+				message.ID,
+			)
 		}
 	}
 }

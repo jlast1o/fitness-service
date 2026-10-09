@@ -329,49 +329,6 @@ func (r *WorkoutRepo) CreateOutboxEvent(ctx context.Context, event *domain.Outbo
 	return nil
 }
 
-// ListPendingOutboxEvents возвращает неопубликованные события.
-func (r *WorkoutRepo) ListPendingOutboxEvents(ctx context.Context, limit int) ([]domain.OutboxEvent, error) {
-	ctx, cancel := r.operationCtx(ctx)
-	defer cancel()
-
-	query := `
-		SELECT id, event_type, event_version, payload, created_at, published_at
-		FROM outbox_events
-		WHERE published_at IS NULL
-		ORDER BY created_at
-		LIMIT $1
-	`
-	rows, err := r.pool.Query(ctx, query, limit)
-	if err != nil {
-		return nil, fmt.Errorf("query pending outbox events: %w", err)
-	}
-	defer rows.Close()
-
-	var outboxEvents []domain.OutboxEvent
-	for rows.Next() {
-		var e domain.OutboxEvent
-		if err := rows.Scan(
-			&e.ID, &e.EventType, &e.EventVersion, &e.Payload, &e.CreatedAt, &e.PublishedAt,
-		); err != nil {
-			return nil, fmt.Errorf("scan outbox event: %w", err)
-		}
-		outboxEvents = append(outboxEvents, e)
-	}
-	return outboxEvents, rows.Err()
-}
-
-// MarkOutboxEventPublished помечает событие как опубликованное.
-func (r *WorkoutRepo) MarkOutboxEventPublished(ctx context.Context, eventID string) error {
-	ctx, cancel := r.operationCtx(ctx)
-	defer cancel()
-
-	_, err := r.pool.Exec(ctx, `UPDATE outbox_events SET published_at = NOW() WHERE id = $1`, eventID)
-	if err != nil {
-		return fmt.Errorf("mark outbox event published: %w", err)
-	}
-	return nil
-}
-
 // UpdateWorkoutWithSets обновляет тренировку и полностью заменяет её подходы.
 func (r *WorkoutRepo) UpdateWorkoutWithSets(ctx context.Context, workout *domain.Workout, sets []domain.ExerciseSet) error {
 	ctx, cancel := r.operationCtx(ctx)

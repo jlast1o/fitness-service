@@ -109,7 +109,17 @@ func main() {
 		logger.Log.Fatal().Err(err).Msg("Failed to start HTTP server")
 	}
 
-	publisher := outbox.NewPublisher(workoutRepo, redisClient, "workout.events", 5*time.Second)
+	outboxRepo := postgres.NewOutboxRepo(
+		pool,
+		cfg.DatabaseOperationTimeout,
+	)
+
+	publisher := outbox.NewPublisher(
+		outboxRepo,
+		redisClient,
+		"workout.events",
+		5*time.Second,
+	)
 
 	var wg sync.WaitGroup
 	wg.Add(1)

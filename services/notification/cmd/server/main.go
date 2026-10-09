@@ -18,7 +18,6 @@ import (
 
 type consumerRecoveryConfig struct {
 	ClaimMinIdle time.Duration `envconfig:"REDIS_CONSUMER_CLAIM_MIN_IDLE" default:"30s"`
-	ClaimCount   int64         `envconfig:"REDIS_CONSUMER_CLAIM_COUNT" default:"10"`
 }
 
 func main() {
@@ -33,9 +32,9 @@ func main() {
 			Msg("failed to load consumer recovery config")
 	}
 
-	if recoveryCfg.ClaimMinIdle <= 0 || recoveryCfg.ClaimCount <= 0 {
+	if recoveryCfg.ClaimMinIdle < 20*time.Second {
 		logger.Log.Fatal().
-			Msg("invalid redis consumer recovery configuration")
+			Msg("notification claim min idle must be at least 20s")
 	}
 
 	// 2. Читаем конфигурацию из переменных окружения
@@ -77,10 +76,10 @@ func main() {
 		"workout.events",
 		"notification-group",
 		"notification-consumer-1",
-		pool,
 		recoveryCfg.ClaimMinIdle,
-		recoveryCfg.ClaimCount,
+		notificationSender,
 	)
+
 	go redisConsumer.Run(ctx)
 
 	// 8. Создаём и запускаем Reminder Poller

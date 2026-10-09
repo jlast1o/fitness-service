@@ -13,42 +13,42 @@ import (
 	"fitness-platform/pkg/events"
 	"fitness-platform/pkg/logger"
 	"fitness-platform/services/notification/internal/domain"
-	"fitness-platform/services/notification/internal/worker"
+	"fitness-platform/services/notification/internal/sender"
 )
 
-// RedisConsumer читает события из Redis Streams и отправляет их в worker pool.
+const (
+	notificationBatchSize   int64 = 1
+	notificationSendTimeout       = 10 * time.Second
+)
+
 type RedisConsumer struct {
 	redisClient *redis.Client
 	stream      string
 	group       string
 	consumer    string
-	pool        *worker.Pool
+	sender      sender.Sender
 
 	claimMinIdle time.Duration
-	claimCount   int64
 	claimStart   string
 }
 
-// NewRedisConsumer создаёт нового consumer.
 func NewRedisConsumer(
 	redisClient *redis.Client,
 	stream, group, consumerName string,
-	pool *worker.Pool,
 	claimMinIdle time.Duration,
-	claimCount int64,
+	notificationSender sender.Sender,
 ) *RedisConsumer {
 	return &RedisConsumer{
 		redisClient:  redisClient,
 		stream:       stream,
 		group:        group,
 		consumer:     consumerName,
-		pool:         pool,
+		sender:       notificationSender,
 		claimMinIdle: claimMinIdle,
-		claimCount:   claimCount,
+		claimStart:   "0-0",
 	}
 }
 
-// Run запускает цикл обработки сообщений.
 func (c *RedisConsumer) Run(ctx context.Context) {
 	err := c.redisClient.XGroupCreateMkStream(
 		ctx,
@@ -60,23 +60,26 @@ func (c *RedisConsumer) Run(ctx context.Context) {
 	if err != nil && !strings.Contains(err.Error(), "BUSYGROUP") {
 		logger.Log.Error().
 			Err(err).
-			Msg("failed to create consumer group")
-
+			Msg("failed to create notification consumer group")
 		return
 	}
 
 	for {
+		if ctx.Err() != nil {
+			logger.Log.Info().
+				Msg("notification consumer stopped")
+			return
+		}
+
+		c.recoverPendingBatch(ctx)
+		c.processBatch(ctx)
+
 		select {
 		case <-ctx.Done():
 			logger.Log.Info().
 				Msg("notification consumer stopped")
-
 			return
-
-		default:
-			c.recoverPendingBatch(ctx)
-			c.processBatch(ctx)
-			time.Sleep(1 * time.Second)
+		case <-time.After(time.Second):
 		}
 	}
 }
@@ -90,7 +93,7 @@ func (c *RedisConsumer) recoverPendingBatch(ctx context.Context) {
 			Consumer: c.consumer,
 			MinIdle:  c.claimMinIdle,
 			Start:    c.claimStart,
-			Count:    c.claimCount,
+			Count:    notificationBatchSize,
 		},
 	).Result()
 
@@ -98,7 +101,7 @@ func (c *RedisConsumer) recoverPendingBatch(ctx context.Context) {
 		if ctx.Err() == nil {
 			logger.Log.Error().
 				Err(err).
-				Msg("failed to recover notification pending messages")
+				Msg("failed to recover pending notification messages")
 		}
 		return
 	}
@@ -109,14 +112,9 @@ func (c *RedisConsumer) recoverPendingBatch(ctx context.Context) {
 		return
 	}
 
-	logger.Log.Info().
-		Int("count", len(messages)).
-		Msg("recovered notification pending messages")
-
 	c.processMessages(ctx, messages)
 }
 
-// processBatch читает пачку сообщений и ставит notification tasks в worker pool.
 func (c *RedisConsumer) processBatch(ctx context.Context) {
 	streams, err := c.redisClient.XReadGroup(
 		ctx,
@@ -124,7 +122,7 @@ func (c *RedisConsumer) processBatch(ctx context.Context) {
 			Group:    c.group,
 			Consumer: c.consumer,
 			Streams:  []string{c.stream, ">"},
-			Count:    10,
+			Count:    notificationBatchSize,
 			Block:    time.Second,
 		},
 	).Result()
@@ -201,18 +199,33 @@ func (c *RedisConsumer) processMessages(
 				),
 			}
 
-			if !c.pool.Submit(task) {
-				logger.Log.Warn().
+			// Отправляем непосредственно здесь.
+			// Больше не складываем задачу в RAM-очередь.
+			sendCtx, cancel := context.WithTimeout(
+				ctx,
+				notificationSendTimeout,
+			)
+
+			err := c.sender.Send(
+				sendCtx,
+				task.UserID,
+				task.Message,
+			)
+			cancel()
+
+			if err != nil {
+				logger.Log.Error().
+					Err(err).
 					Str("event_id", envelope.EventID).
 					Str("redis_message_id", message.ID).
-					Msg("notification worker pool rejected task")
+					Msg("failed to send notification; leaving message pending")
 
-				// Задачу не приняли — ACK не делаем.
+				// Нет ACK.
+				// XAUTOCLAIM сможет повторить попытку.
 				return
 			}
 
-			// Временно сохраняем ACK после Submit.
-			// Исправим в notification-delivery PR.
+			// ACK только после успешного Send().
 			c.ackMessage(ctx, message.ID)
 
 		case events.TypeWorkoutUpdated:
@@ -233,7 +246,6 @@ func (c *RedisConsumer) processMessages(
 	}
 }
 
-// parseEnvelope извлекает Envelope из Redis message.
 func parseEnvelope(
 	values map[string]interface{},
 ) (events.Envelope, error) {
@@ -257,7 +269,6 @@ func parseEnvelope(
 	return envelope, nil
 }
 
-// ackMessage подтверждает Redis Stream message.
 func (c *RedisConsumer) ackMessage(
 	ctx context.Context,
 	messageID string,

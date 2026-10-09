@@ -3,28 +3,53 @@ package outbox
 import (
 	"context"
 	"encoding/json"
-	"fitness-platform/pkg/events"
-	"fitness-platform/pkg/logger"
-	"fitness-platform/services/workout/internal/repository"
 	"fmt"
 	"math/rand/v2"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
+
+	"fitness-platform/pkg/events"
+	"fitness-platform/pkg/logger"
+	"fitness-platform/services/workout/internal/domain"
 )
 
-const maxBackoffInterval = 60 * time.Second
+const (
+	maxBackoffInterval = 60 * time.Second
+	outboxClaimLease   = 30 * time.Second
+	maxBatchSize       = 100
+)
 
-// Publisher отвечает за публикацию outbox-событий в Redis Streams.
+// Repository содержит только операции,
+// необходимые Outbox Publisher.
+type Repository interface {
+	ClaimNextOutboxEvent(
+		ctx context.Context,
+		claimToken string,
+		lease time.Duration,
+	) (*domain.OutboxEvent, error)
+
+	MarkOutboxEventPublishedClaimed(
+		ctx context.Context,
+		eventID string,
+		claimToken string,
+	) error
+}
+
 type Publisher struct {
-	repo        repository.WorkoutRepository
+	repo        Repository
 	redisClient *redis.Client
 	streamName  string
 	interval    time.Duration
 }
 
-// NewPublisher создаёт новый экземпляр Publisher.
-func NewPublisher(repo repository.WorkoutRepository, redisClient *redis.Client, streamName string, interval time.Duration) *Publisher {
+func NewPublisher(
+	repo Repository,
+	redisClient *redis.Client,
+	streamName string,
+	interval time.Duration,
+) *Publisher {
 	return &Publisher{
 		repo:        repo,
 		redisClient: redisClient,
@@ -33,8 +58,6 @@ func NewPublisher(repo repository.WorkoutRepository, redisClient *redis.Client, 
 	}
 }
 
-// Run запускает бесконечный цикл обработки outbox-событий.
-// Останавливается по отмене контекста.
 func (p *Publisher) Run(ctx context.Context) {
 	currentInterval := p.interval
 
@@ -44,14 +67,14 @@ func (p *Publisher) Run(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			logger.Log.Info().Msg("outbox publisher stopped")
+			logger.Log.Info().
+				Msg("outbox publisher stopped")
 			return
 
 		case <-timer.C:
 			err := p.processBatch(ctx)
 
 			if ctx.Err() != nil {
-				logger.Log.Info().Msg("outbox publisher stopped")
 				return
 			}
 
@@ -74,18 +97,41 @@ func (p *Publisher) Run(ctx context.Context) {
 	}
 }
 
-// processBatch выбирает неопубликованные события, отправляет их в Redis и помечает.
+// processBatch резервирует и публикует
+// максимум maxBatchSize событий за один проход.
 func (p *Publisher) processBatch(ctx context.Context) error {
-	pendingEvents, err := p.repo.ListPendingOutboxEvents(ctx, 100)
-	if err != nil {
-		return fmt.Errorf("list pending outbox events: %w", err)
-	}
+	for i := 0; i < maxBatchSize; i++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 
-	for _, event := range pendingEvents {
+		// Уникальный token для каждой попытки публикации.
+		claimToken := uuid.NewString()
+
+		event, err := p.repo.ClaimNextOutboxEvent(
+			ctx,
+			claimToken,
+			outboxClaimLease,
+		)
+		if err != nil {
+			return fmt.Errorf(
+				"claim outbox event: %w",
+				err,
+			)
+		}
+
+		// Больше доступных событий нет.
+		if event == nil {
+			return nil
+		}
+
 		payloadJSON, err := json.Marshal(event.Payload)
 		if err != nil {
-			logger.Log.Error().Err(err).Str("event_id", event.ID).Msg("failed to marshal outbox payload")
-			continue
+			return fmt.Errorf(
+				"marshal payload of event %s: %w",
+				event.ID,
+				err,
+			)
 		}
 
 		envelope := events.Envelope{
@@ -98,21 +144,47 @@ func (p *Publisher) processBatch(ctx context.Context) error {
 
 		envelopeJSON, err := json.Marshal(envelope)
 		if err != nil {
-			logger.Log.Error().Err(err).Str("event_id", event.ID).Msg("failed to marshal envelope")
-			continue
+			return fmt.Errorf(
+				"marshal envelope of event %s: %w",
+				event.ID,
+				err,
+			)
 		}
 
-		if err := p.redisClient.XAdd(ctx, &redis.XAddArgs{
-			Stream: p.streamName,
-			Values: map[string]interface{}{
-				"event": string(envelopeJSON),
+		// Публикуем в Redis Streams.
+		err = p.redisClient.XAdd(
+			ctx,
+			&redis.XAddArgs{
+				Stream: p.streamName,
+				Values: map[string]interface{}{
+					"event": string(envelopeJSON),
+				},
 			},
-		}).Err(); err != nil {
-			return fmt.Errorf("publish outbox event %s: %w", event.ID, err)
+		).Err()
+
+		if err != nil {
+			// Claim НЕ снимаем.
+			// После окончания lease событие
+			// снова станет доступным.
+			return fmt.Errorf(
+				"publish outbox event %s: %w",
+				event.ID,
+				err,
+			)
 		}
 
-		if err := p.repo.MarkOutboxEventPublished(ctx, event.ID); err != nil {
-			return fmt.Errorf("mark outbox event %s as published: %w", event.ID, err)
+		// Помечаем опубликованным только
+		// при совпадении claimToken.
+		if err := p.repo.MarkOutboxEventPublishedClaimed(
+			ctx,
+			event.ID,
+			claimToken,
+		); err != nil {
+			return fmt.Errorf(
+				"mark outbox event %s published: %w",
+				event.ID,
+				err,
+			)
 		}
 	}
 
@@ -128,13 +200,12 @@ func nextBackoff(current time.Duration) time.Duration {
 }
 
 func withJitter(interval time.Duration) time.Duration {
-	maxJitter := interval / 5 // до 20%
+	maxJitter := interval / 5
 
 	if maxJitter <= 0 {
 		return interval
 	}
 
 	jitter := time.Duration(rand.Int64N(int64(maxJitter)))
-
 	return interval - jitter
 }

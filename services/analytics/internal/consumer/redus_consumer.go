@@ -10,6 +10,7 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
+	"fitness-platform/pkg/backoff"
 	"fitness-platform/pkg/events"
 	"fitness-platform/pkg/logger"
 	"fitness-platform/services/analytics/internal/domain"
@@ -53,41 +54,88 @@ func NewRedisConsumer(
 
 // Run запускает цикл обработки сообщений.
 func (c *RedisConsumer) Run(ctx context.Context) {
-	// Создаём группу потребителей, если её нет.
-	// "$" означает: начинаем читать только новые сообщения после создания группы.
 	err := c.redisClient.XGroupCreateMkStream(
-		ctx,
-		c.stream,
-		c.group,
-		"$",
+		ctx, c.stream, c.group, "$",
 	).Err()
 
 	if err != nil && !strings.Contains(err.Error(), "BUSYGROUP") {
 		logger.Log.Error().
 			Err(err).
-			Msg("failed to create consumer group")
+			Msg("failed to create analytics consumer group")
+		return
+	}
 
+	retry, err := backoff.New(
+		250*time.Millisecond,
+		30*time.Second,
+	)
+	if err != nil {
+		logger.Log.Error().
+			Err(err).
+			Msg("invalid redis consumer backoff settings")
 		return
 	}
 
 	for {
-		select {
-		case <-ctx.Done():
-			logger.Log.Info().
-				Msg("analytics consumer stopped")
-
+		if ctx.Err() != nil {
+			logger.Log.Info().Msg("analytics consumer stopped")
 			return
+		}
 
-		default:
-			c.recoverPendingBatch(ctx)
-			c.processBatch(ctx)
-			time.Sleep(1 * time.Second)
+		// Сначала восстанавливаем pending-сообщения.
+		if err := c.recoverPendingBatch(ctx); err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+
+			delay := retry.Next()
+
+			logger.Log.Warn().
+				Err(err).
+				Dur("retry_in", delay).
+				Msg("analytics redis recovery failed")
+
+			if backoff.Wait(ctx, delay) != nil {
+				return
+			}
+
+			continue
+		}
+
+		// Затем читаем новые сообщения.
+		if err := c.processBatch(ctx); err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+
+			delay := retry.Next()
+
+			logger.Log.Warn().
+				Err(err).
+				Dur("retry_in", delay).
+				Msg("analytics redis stream read failed")
+
+			if backoff.Wait(ctx, delay) != nil {
+				return
+			}
+
+			continue
+		}
+
+		// Обе Redis-операции завершились успешно.
+		retry.Reset()
+
+		if backoff.Wait(ctx, time.Second) != nil {
+			return
 		}
 	}
 }
 
-func (c *RedisConsumer) recoverPendingBatch(ctx context.Context) {
-	messages, nextStart, err := c.redisClient.XAutoClaim(ctx,
+func (c *RedisConsumer) recoverPendingBatch(
+	ctx context.Context,
+) error {
+	messages, nextStart, err := c.redisClient.XAutoClaim(
+		ctx,
 		&redis.XAutoClaimArgs{
 			Stream:   c.stream,
 			Group:    c.group,
@@ -99,24 +147,27 @@ func (c *RedisConsumer) recoverPendingBatch(ctx context.Context) {
 	).Result()
 
 	if err != nil {
-		logger.Log.Error().Err(err).Str("claim_start", c.claimStart).Msg("failed to recovery pending redis messages")
+		return fmt.Errorf("xautoclaim: %w", err)
 	}
 
+	// Курсор меняем только после успешного XAUTOCLAIM.
 	c.claimStart = nextStart
 
-	if len(messages) == 0 {
-		return
+	if len(messages) > 0 {
+		logger.Log.Info().
+			Int("count", len(messages)).
+			Msg("recovered analytics pending messages")
+
+		c.processMessages(ctx, messages)
 	}
 
-	logger.Log.Info().Int("count", len(messages)).Msg("recovered pending redis messages")
-
-	c.processMessages(ctx, messages)
+	return nil
 }
 
 // processBatch читает пачку сообщений и обрабатывает их.
 func (c *RedisConsumer) processBatch(
 	ctx context.Context,
-) {
+) error {
 	streams, err := c.redisClient.XReadGroup(
 		ctx,
 		&redis.XReadGroupArgs{
@@ -124,28 +175,24 @@ func (c *RedisConsumer) processBatch(
 			Consumer: c.consumer,
 			Streams:  []string{c.stream, ">"},
 			Count:    10,
-			Block:    1 * time.Second,
+			Block:    time.Second,
 		},
 	).Result()
 
+	// Нет новых сообщений — нормальная ситуация.
+	if errors.Is(err, redis.Nil) {
+		return nil
+	}
+
 	if err != nil {
-		if redis.HasErrorPrefix(err, "timeout") {
-			return
-		}
-
-		logger.Log.Error().
-			Err(err).
-			Msg("failed to read from redis stream")
-
-		return
+		return fmt.Errorf("xreadgroup: %w", err)
 	}
 
 	for _, stream := range streams {
-		c.processMessages(
-			ctx,
-			stream.Messages,
-		)
+		c.processMessages(ctx, stream.Messages)
 	}
+
+	return nil
 }
 
 func (c *RedisConsumer) processMessages(

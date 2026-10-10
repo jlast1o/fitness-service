@@ -59,9 +59,7 @@ func main() {
 	plannerHandler := handler.NewPlannerHandler(plannerService)
 
 	redisClient := redis.NewClient(&redis.Options{Addr: cfg.RedisAddr})
-	if err := redisClient.Ping(ctx).Err(); err != nil {
-		logger.Log.Fatal().Err(err).Msg("Failed to connect to Redis")
-	}
+
 	defer redisClient.Close()
 
 	httpShutdown, err := server.RunREST(

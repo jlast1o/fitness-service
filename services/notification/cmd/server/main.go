@@ -58,9 +58,7 @@ func main() {
 
 	// 4. Подключение к Redis
 	redisClient := redis.NewClient(&redis.Options{Addr: redisAddr})
-	if err := redisClient.Ping(ctx).Err(); err != nil {
-		logger.Log.Fatal().Err(err).Msg("Failed to connect to Redis")
-	}
+
 	defer redisClient.Close()
 
 	// 5. Создаём отправителя

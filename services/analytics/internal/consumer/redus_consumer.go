@@ -5,14 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
 
-	"fitness-platform/pkg/backoff"
 	"fitness-platform/pkg/events"
 	"fitness-platform/pkg/logger"
+	"fitness-platform/pkg/redisstartup"
 	"fitness-platform/services/analytics/internal/domain"
 	"fitness-platform/services/analytics/internal/service"
 )
@@ -54,81 +53,17 @@ func NewRedisConsumer(
 
 // Run запускает цикл обработки сообщений.
 func (c *RedisConsumer) Run(ctx context.Context) {
-	err := c.redisClient.XGroupCreateMkStream(
-		ctx, c.stream, c.group, "$",
-	).Err()
-
-	if err != nil && !strings.Contains(err.Error(), "BUSYGROUP") {
-		logger.Log.Error().
-			Err(err).
-			Msg("failed to create analytics consumer group")
-		return
-	}
-
-	retry, err := backoff.New(
-		250*time.Millisecond,
-		30*time.Second,
-	)
-	if err != nil {
-		logger.Log.Error().
-			Err(err).
-			Msg("invalid redis consumer backoff settings")
-		return
-	}
-
-	for {
-		if ctx.Err() != nil {
-			logger.Log.Info().Msg("analytics consumer stopped")
-			return
-		}
-
-		// Сначала восстанавливаем pending-сообщения.
-		if err := c.recoverPendingBatch(ctx); err != nil {
-			if ctx.Err() != nil {
-				return
-			}
-
-			delay := retry.Next()
-
-			logger.Log.Warn().
-				Err(err).
-				Dur("retry_in", delay).
-				Msg("analytics redis recovery failed")
-
-			if backoff.Wait(ctx, delay) != nil {
-				return
-			}
-
-			continue
-		}
-
-		// Затем читаем новые сообщения.
-		if err := c.processBatch(ctx); err != nil {
-			if ctx.Err() != nil {
-				return
-			}
-
-			delay := retry.Next()
-
-			logger.Log.Warn().
-				Err(err).
-				Dur("retry_in", delay).
-				Msg("analytics redis stream read failed")
-
-			if backoff.Wait(ctx, delay) != nil {
-				return
-			}
-
-			continue
-		}
-
-		// Обе Redis-операции завершились успешно.
-		retry.Reset()
-
-		if backoff.Wait(ctx, time.Second) != nil {
-			return
-		}
-	}
+	redisstartup.Runner{
+		Client:         c.redisClient,
+		Stream:         c.stream,
+		Group:          c.group,
+		Service:        "analytics",
+		RecoverPending: c.recoverPendingBatch,
+		ReadNew:        c.processBatch,
+		OnGroupReady: func() {
+			c.claimStart = "0-0"
+		},
+	}.Run(ctx)
 }
 
 func (c *RedisConsumer) recoverPendingBatch(

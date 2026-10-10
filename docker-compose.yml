@@ -93,7 +93,7 @@ services:
       postgres_workout:
         condition: service_healthy
       redis:
-        condition: service_healthy
+        condition: service_started
 
   # === НОВЫЙ БЛОК: Сервис аналитики ===
   analytics:
@@ -112,7 +112,7 @@ services:
       postgres_analytics:
         condition: service_healthy
       redis:
-        condition: service_healthy
+        condition: service_started
 
   postgres_planner:
     image: postgres:15-alpine
@@ -146,7 +146,7 @@ services:
       postgres_planner:
         condition: service_healthy
       redis:
-        condition: service_healthy
+        condition: service_started
 
   notification:
     build:

@@ -5,14 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
 
-	"fitness-platform/pkg/backoff"
 	"fitness-platform/pkg/events"
 	"fitness-platform/pkg/logger"
+	"fitness-platform/pkg/redisstartup"
 	"fitness-platform/services/planner/internal/domain"
 	"fitness-platform/services/planner/internal/service"
 )
@@ -54,78 +53,17 @@ func NewRedisConsumer(
 
 // Run запускает цикл обработки.
 func (c *RedisConsumer) Run(ctx context.Context) {
-	err := c.redisClient.XGroupCreateMkStream(
-		ctx, c.stream, c.group, "$",
-	).Err()
-
-	if err != nil && !strings.Contains(err.Error(), "BUSYGROUP") {
-		logger.Log.Error().
-			Err(err).
-			Msg("failed to create planner consumer group")
-		return
-	}
-
-	retry, err := backoff.New(
-		250*time.Millisecond,
-		30*time.Second,
-	)
-	if err != nil {
-		logger.Log.Error().
-			Err(err).
-			Msg("invalid redis consumer backoff settings")
-		return
-	}
-
-	for {
-		if ctx.Err() != nil {
-			logger.Log.Info().Msg("planner consumer stopped")
-			return
-		}
-
-		if err := c.recoverPendingBatch(ctx); err != nil {
-			if ctx.Err() != nil {
-				return
-			}
-
-			delay := retry.Next()
-
-			logger.Log.Warn().
-				Err(err).
-				Dur("retry_in", delay).
-				Msg("planner redis recovery failed")
-
-			if backoff.Wait(ctx, delay) != nil {
-				return
-			}
-
-			continue
-		}
-
-		if err := c.processBatch(ctx); err != nil {
-			if ctx.Err() != nil {
-				return
-			}
-
-			delay := retry.Next()
-
-			logger.Log.Warn().
-				Err(err).
-				Dur("retry_in", delay).
-				Msg("planner redis stream read failed")
-
-			if backoff.Wait(ctx, delay) != nil {
-				return
-			}
-
-			continue
-		}
-
-		retry.Reset()
-
-		if backoff.Wait(ctx, time.Second) != nil {
-			return
-		}
-	}
+	redisstartup.Runner{
+		Client:         c.redisClient,
+		Stream:         c.stream,
+		Group:          c.group,
+		Service:        "planner",
+		RecoverPending: c.recoverPendingBatch,
+		ReadNew:        c.processBatch,
+		OnGroupReady: func() {
+			c.claimStart = "0-0"
+		},
+	}.Run(ctx)
 }
 
 // recoverPendingBatch проверяет и обрабатывает сообщения, которые были прочитаны, но не подтверждены.

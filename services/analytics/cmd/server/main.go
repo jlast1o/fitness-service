@@ -70,9 +70,7 @@ func main() {
 
 	// 10. Подключаемся к Redis
 	redisClient := redis.NewClient(&redis.Options{Addr: cfg.RedisAddr})
-	if err := redisClient.Ping(ctx).Err(); err != nil {
-		logger.Log.Fatal().Err(err).Msg("Failed to connect to Redis")
-	}
+
 	defer redisClient.Close()
 
 	// 9. Запускаем HTTP-сервер

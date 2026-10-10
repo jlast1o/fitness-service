@@ -80,9 +80,6 @@ func main() {
 			Err(err).
 			Msg("Failed to initialize Redis tracing")
 	}
-	if err := redisClient.Ping(ctx).Err(); err != nil {
-		logger.Log.Fatal().Err(err).Msg("failed to ping redis")
-	}
 	defer redisClient.Close()
 
 	// 7. Создаём сервис

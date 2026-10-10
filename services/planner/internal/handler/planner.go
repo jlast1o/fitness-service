@@ -31,6 +31,14 @@ type upsertProfileRequest struct {
 	Current1RM      map[string]float64 `json:"current_1rm,omitempty"`
 }
 
+// updateProfileRequest — тело PATCH-запроса для частичного обновления профиля.
+type updateProfileRequest struct {
+	Goal            *string         `json:"goal,omitempty"`
+	ExperienceLevel *string         `json:"experience_level,omitempty"`
+	DaysPerWeek     *int            `json:"days_per_week,omitempty"`
+	Injuries        *map[string]any `json:"injuries,omitempty"`
+}
+
 // UpsertProfile обрабатывает POST /planner/profile.
 func (h *PlannerHandler) UpsertProfile(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.GetUserID(r.Context())

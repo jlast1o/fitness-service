@@ -41,6 +41,11 @@ scrape_configs:
         labels:
           service: "planner"
 
+      - targets:
+          - "nutrition:8084"
+        labels:
+          service: "nutrition"
+
   - job_name: "blackbox-live"
     metrics_path: /probe
 
@@ -71,6 +76,10 @@ scrape_configs:
           - "http://planner:8083/health/live"
         labels:
           service: "planner"
+      - targets:
+          - "http://nutrition:8084/health/live"
+        labels:
+          service: "nutrition"
 
     relabel_configs:
       - source_labels:
@@ -114,6 +123,11 @@ scrape_configs:
           - "http://planner:8083/health/ready"
         labels:
           service: "planner"
+
+      - targets:
+          - "http://nutrition:8084/health/ready"
+        labels:
+          service: "nutrition"
 
     relabel_configs:
       - source_labels:

@@ -8,7 +8,7 @@ discovery.relabel "app_containers" {
   // Берём только наши application services.
   rule {
     source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
-    regex         = "auth|workout|analytics|planner|notification"
+    regex = "auth|workout|analytics|planner|notification|nutrition"
     action        = "keep"
   }
 

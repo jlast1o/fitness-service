@@ -10,6 +10,7 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
+	"fitness-platform/pkg/backoff"
 	"fitness-platform/pkg/events"
 	"fitness-platform/pkg/logger"
 	"fitness-platform/services/planner/internal/domain"
@@ -60,7 +61,18 @@ func (c *RedisConsumer) Run(ctx context.Context) {
 	if err != nil && !strings.Contains(err.Error(), "BUSYGROUP") {
 		logger.Log.Error().
 			Err(err).
-			Msg("failed to create consumer group")
+			Msg("failed to create planner consumer group")
+		return
+	}
+
+	retry, err := backoff.New(
+		250*time.Millisecond,
+		30*time.Second,
+	)
+	if err != nil {
+		logger.Log.Error().
+			Err(err).
+			Msg("invalid redis consumer backoff settings")
 		return
 	}
 
@@ -70,20 +82,56 @@ func (c *RedisConsumer) Run(ctx context.Context) {
 			return
 		}
 
-		c.recoverPendingBatch(ctx)
-		c.processBatch(ctx)
+		if err := c.recoverPendingBatch(ctx); err != nil {
+			if ctx.Err() != nil {
+				return
+			}
 
-		select {
-		case <-ctx.Done():
-			logger.Log.Info().Msg("planner consumer stopped")
+			delay := retry.Next()
+
+			logger.Log.Warn().
+				Err(err).
+				Dur("retry_in", delay).
+				Msg("planner redis recovery failed")
+
+			if backoff.Wait(ctx, delay) != nil {
+				return
+			}
+
+			continue
+		}
+
+		if err := c.processBatch(ctx); err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+
+			delay := retry.Next()
+
+			logger.Log.Warn().
+				Err(err).
+				Dur("retry_in", delay).
+				Msg("planner redis stream read failed")
+
+			if backoff.Wait(ctx, delay) != nil {
+				return
+			}
+
+			continue
+		}
+
+		retry.Reset()
+
+		if backoff.Wait(ctx, time.Second) != nil {
 			return
-		case <-time.After(time.Second):
 		}
 	}
 }
 
 // recoverPendingBatch проверяет и обрабатывает сообщения, которые были прочитаны, но не подтверждены.
-func (c *RedisConsumer) recoverPendingBatch(ctx context.Context) {
+func (c *RedisConsumer) recoverPendingBatch(
+	ctx context.Context,
+) error {
 	messages, nextStart, err := c.redisClient.XAutoClaim(
 		ctx,
 		&redis.XAutoClaimArgs{
@@ -97,28 +145,25 @@ func (c *RedisConsumer) recoverPendingBatch(ctx context.Context) {
 	).Result()
 
 	if err != nil {
-		if ctx.Err() == nil {
-			logger.Log.Error().
-				Err(err).
-				Msg("failed to recover planner pending messages")
-		}
-		return
+		return fmt.Errorf("xautoclaim: %w", err)
 	}
 
 	c.claimStart = nextStart
 
-	if len(messages) == 0 {
-		return
+	if len(messages) > 0 {
+		logger.Log.Info().
+			Int("count", len(messages)).
+			Msg("recovered planner pending messages")
+
+		c.processMessages(ctx, messages)
 	}
 
-	logger.Log.Info().
-		Int("count", len(messages)).
-		Msg("recovered planner pending messages")
-
-	c.processMessages(ctx, messages)
+	return nil
 }
 
-func (c *RedisConsumer) processBatch(ctx context.Context) {
+func (c *RedisConsumer) processBatch(
+	ctx context.Context,
+) error {
 	streams, err := c.redisClient.XReadGroup(
 		ctx,
 		&redis.XReadGroupArgs{
@@ -130,20 +175,19 @@ func (c *RedisConsumer) processBatch(ctx context.Context) {
 		},
 	).Result()
 
-	if err != nil {
-		if errors.Is(err, redis.Nil) || ctx.Err() != nil {
-			return
-		}
+	if errors.Is(err, redis.Nil) {
+		return nil
+	}
 
-		logger.Log.Error().
-			Err(err).
-			Msg("failed to read planner redis stream")
-		return
+	if err != nil {
+		return fmt.Errorf("xreadgroup: %w", err)
 	}
 
 	for _, stream := range streams {
 		c.processMessages(ctx, stream.Messages)
 	}
+
+	return nil
 }
 
 func (c *RedisConsumer) processMessages(

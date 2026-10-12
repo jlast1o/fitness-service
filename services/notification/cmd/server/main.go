@@ -56,6 +56,11 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	pollCtx, stopPolling := context.WithCancel(ctx)
+	defer stopPolling()
+
+	workCtx, cancelWork := context.WithCancel(ctx)
+	defer cancelWork()
 	// 4. Подключение к Redis
 	redisClient := redis.NewClient(&redis.Options{Addr: redisAddr})
 
@@ -65,7 +70,12 @@ func main() {
 	notificationSender := sender.NewLoggerSender()
 
 	// 6. Создаём пул воркеров
-	pool := worker.NewPool(ctx, notificationSender, 4, 100)
+	pool := worker.NewPool(
+		workCtx,
+		notificationSender,
+		4,
+		100,
+	)
 	pool.Start()
 
 	// 7. Создаём и запускаем Redis Consumer
@@ -78,7 +88,16 @@ func main() {
 		notificationSender,
 	)
 
-	go redisConsumer.Run(ctx)
+	consumerDone := make(chan struct{})
+
+	go func() {
+		defer close(consumerDone)
+
+		redisConsumer.RunWithContexts(
+			pollCtx,
+			workCtx,
+		)
+	}()
 
 	// 8. Создаём и запускаем Reminder Poller
 	reminderPoller := poller.NewReminderPoller(
@@ -87,13 +106,44 @@ func main() {
 		pollInterval,
 		internalToken,
 	)
-	go reminderPoller.Run(ctx)
+	reminderDone := make(chan struct{})
 
-	// 9. Graceful shutdown
-	shutdown.Graceful(ctx, cancel,
-		func(ctx context.Context) error {
-			// Останавливаем пул: отменяем контекст, закрываем канал, ждём воркеров
-			return pool.Shutdown(ctx)
-		},
-	)
+	go func() {
+		defer close(reminderDone)
+
+		reminderPoller.Run(pollCtx)
+	}()
+
+	// Объединяем завершение трёх фоновых компонентов
+	// в один сигнал для GracefulDrain.
+	backgroundDone := make(chan struct{})
+
+	go func() {
+		defer close(backgroundDone)
+
+		// 1. Consumer перестал принимать события.
+		<-consumerDone
+
+		// 2. Reminder Poller перестал создавать задачи.
+		<-reminderDone
+
+		// 3. Теперь безопасно опустошаем Worker Pool.
+		if err := pool.Shutdown(workCtx); err != nil {
+			logger.Log.Error().
+				Err(err).
+				Msg("notification worker pool shutdown incomplete")
+		}
+	}()
+
+	if err := shutdown.GracefulDrain(
+		stopPolling,
+		cancelWork,
+		backgroundDone,
+		nil, // У Notification нет HTTP-сервера.
+		nil, // Нет tracing shutdown.
+	); err != nil {
+		logger.Log.Error().
+			Err(err).
+			Msg("incomplete notification shutdown")
+	}
 }

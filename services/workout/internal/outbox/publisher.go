@@ -58,7 +58,17 @@ func NewPublisher(
 	}
 }
 
+// Run сохраняет совместимость со старым API.
 func (p *Publisher) Run(ctx context.Context) {
+	p.RunWithContexts(ctx, ctx)
+}
+
+// RunWithContexts разделяет получение новой работы
+// и завершение уже захваченного события.
+func (p *Publisher) RunWithContexts(
+	pollCtx context.Context,
+	workCtx context.Context,
+) {
 	currentInterval := p.interval
 
 	timer := time.NewTimer(currentInterval)
@@ -66,15 +76,22 @@ func (p *Publisher) Run(ctx context.Context) {
 
 	for {
 		select {
-		case <-ctx.Done():
+		case <-pollCtx.Done():
 			logger.Log.Info().
 				Msg("outbox publisher stopped")
 			return
 
 		case <-timer.C:
-			err := p.processBatch(ctx)
+			if pollCtx.Err() != nil {
+				return
+			}
 
-			if ctx.Err() != nil {
+			err := p.processBatchWithContexts(
+				pollCtx,
+				workCtx,
+			)
+
+			if pollCtx.Err() != nil {
 				return
 			}
 
@@ -99,17 +116,33 @@ func (p *Publisher) Run(ctx context.Context) {
 
 // processBatch резервирует и публикует
 // максимум maxBatchSize событий за один проход.
-func (p *Publisher) processBatch(ctx context.Context) error {
+// Сохраняем старый API для существующих вызовов.
+func (p *Publisher) processBatch(
+	ctx context.Context,
+) error {
+	return p.processBatchWithContexts(ctx, ctx)
+}
+
+func (p *Publisher) processBatchWithContexts(
+	pollCtx context.Context,
+	workCtx context.Context,
+) error {
 	for i := 0; i < maxBatchSize; i++ {
-		if err := ctx.Err(); err != nil {
+		// Не начинаем захват следующего события
+		// после начала shutdown.
+		if err := pollCtx.Err(); err != nil {
 			return err
 		}
 
-		// Уникальный token для каждой попытки публикации.
+		if err := workCtx.Err(); err != nil {
+			return err
+		}
+
 		claimToken := uuid.NewString()
 
+		// Захват нового события относится к polling.
 		event, err := p.repo.ClaimNextOutboxEvent(
-			ctx,
+			pollCtx,
 			claimToken,
 			outboxClaimLease,
 		)
@@ -120,11 +153,12 @@ func (p *Publisher) processBatch(ctx context.Context) error {
 			)
 		}
 
-		// Больше доступных событий нет.
 		if event == nil {
 			return nil
 		}
 
+		// С этого момента у нас уже есть захваченное
+		// событие. Его завершаем через workCtx.
 		payloadJSON, err := json.Marshal(event.Payload)
 		if err != nil {
 			return fmt.Errorf(
@@ -151,9 +185,10 @@ func (p *Publisher) processBatch(ctx context.Context) error {
 			)
 		}
 
-		// Публикуем в Redis Streams.
+		// Уже захваченную запись пытаемся
+		// опубликовать до shutdown deadline.
 		err = p.redisClient.XAdd(
-			ctx,
+			workCtx,
 			&redis.XAddArgs{
 				Stream: p.streamName,
 				Values: map[string]interface{}{
@@ -163,9 +198,8 @@ func (p *Publisher) processBatch(ctx context.Context) error {
 		).Err()
 
 		if err != nil {
-			// Claim НЕ снимаем.
-			// После окончания lease событие
-			// снова станет доступным.
+			// Lease останется до истечения срока.
+			// Затем событие можно захватить повторно.
 			return fmt.Errorf(
 				"publish outbox event %s: %w",
 				event.ID,
@@ -173,10 +207,11 @@ func (p *Publisher) processBatch(ctx context.Context) error {
 			)
 		}
 
-		// Помечаем опубликованным только
-		// при совпадении claimToken.
+		// После XADD обязательно пытаемся сохранить
+		// результат публикации в PostgreSQL.
+		// Claim token защищает от устаревшего владельца.
 		if err := p.repo.MarkOutboxEventPublishedClaimed(
-			ctx,
+			workCtx,
 			event.ID,
 			claimToken,
 		); err != nil {
@@ -186,6 +221,9 @@ func (p *Publisher) processBatch(ctx context.Context) error {
 				err,
 			)
 		}
+
+		// Перед следующей итерацией снова
+		// проверим pollCtx.
 	}
 
 	return nil

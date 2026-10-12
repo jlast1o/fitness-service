@@ -89,6 +89,7 @@ services:
       HTTP_PORT: "8081"
       REDIS_ADDR: "redis:6379"
       TRACING_OTLP_ENDPOINT: "tempo:4317"
+    stop_grace_period: 15s
     depends_on:
       postgres_workout:
         condition: service_healthy
@@ -108,6 +109,7 @@ services:
       HTTP_PORT: "8082"
       REDIS_ADDR: "redis:6379"
       TRACING_OTLP_ENDPOINT: "tempo:4317"
+    stop_grace_period: 15s
     depends_on:
       postgres_analytics:
         condition: service_healthy
@@ -142,6 +144,7 @@ services:
       HTTP_PORT: "8083"
       REDIS_ADDR: "redis:6379"
       TRACING_OTLP_ENDPOINT: "tempo:4317"
+    stop_grace_period: 15s
     depends_on:
       postgres_planner:
         condition: service_healthy
@@ -156,6 +159,7 @@ services:
       REDIS_ADDR: "redis:6379"
       PLANNER_BASE_URL: "http://planner:8083"
       INTERNAL_TOKEN: "dev-secret-token"
+    stop_grace_period: 15s
     depends_on:
       - redis
       - planner

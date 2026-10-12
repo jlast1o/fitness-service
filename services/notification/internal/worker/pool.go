@@ -3,7 +3,6 @@ package worker
 import (
 	"context"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"fitness-platform/pkg/logger"
@@ -11,35 +10,49 @@ import (
 	"fitness-platform/services/notification/internal/sender"
 )
 
-// Pool — пул воркеров для обработки уведомлений.
+// Pool хранит reminder-задачи в памяти.
+// Важно: RAM-очередь не является долговременным хранилищем.
 type Pool struct {
 	taskCh  chan domain.NotificationTask
 	sender  sender.Sender
 	workers int
 	wg      sync.WaitGroup
-	ctx     context.Context
-	cancel  context.CancelFunc
 
-	stopped atomic.Bool
+	ctx    context.Context
+	cancel context.CancelFunc
+
+	mu           sync.Mutex
+	stopped      bool
+	stopCh       chan struct{}
+	submitWG     sync.WaitGroup
+	shutdownOnce sync.Once
+	shutdownDone chan struct{}
 }
 
-// NewPool создаёт новый пул.
-// Принимает родительский контекст, отправителя, число воркеров и размер буфера канала.
-func NewPool(ctx context.Context, sender sender.Sender, workers int, bufferSize int) *Pool {
+func NewPool(
+	ctx context.Context,
+	notificationSender sender.Sender,
+	workers int,
+	bufferSize int,
+) *Pool {
 	poolCtx, cancel := context.WithCancel(ctx)
+
 	return &Pool{
-		taskCh:  make(chan domain.NotificationTask, bufferSize),
-		sender:  sender,
-		workers: workers,
-		ctx:     poolCtx,
-		cancel:  cancel,
+		taskCh:       make(chan domain.NotificationTask, bufferSize),
+		sender:       notificationSender,
+		workers:      workers,
+		ctx:          poolCtx,
+		cancel:       cancel,
+		stopCh:       make(chan struct{}),
+		shutdownDone: make(chan struct{}),
 	}
 }
 
-// Start запускает воркеров.
+// Start вызывается один раз до Shutdown.
 func (p *Pool) Start() {
 	for i := 0; i < p.workers; i++ {
 		p.wg.Add(1)
+
 		go func() {
 			defer p.wg.Done()
 			p.workerLoop()
@@ -47,62 +60,96 @@ func (p *Pool) Start() {
 	}
 }
 
-// Submit добавляет задачу в канал.
-// Возвращает true, если задача была принята, и false, если пул остановлен.
-func (p *Pool) Submit(task domain.NotificationTask) bool {
-	if p.stopped.Load() {
+// Submit регистрирует активную отправку в канал.
+// Благодаря submitWG Shutdown не закроет taskCh
+// одновременно с записью в него.
+func (p *Pool) Submit(
+	task domain.NotificationTask,
+) bool {
+	p.mu.Lock()
+
+	if p.stopped {
+		p.mu.Unlock()
 		return false
 	}
+
+	p.submitWG.Add(1)
+	p.mu.Unlock()
+
+	defer p.submitWG.Done()
 
 	select {
 	case <-p.ctx.Done():
 		return false
+
+	case <-p.stopCh:
+		return false
+
 	case p.taskCh <- task:
 		return true
 	}
 }
 
-// Shutdown останавливает пул и ожидает завершения воркеров.
+// Shutdown останавливает приём новых задач,
+// дожидается завершения уже принятых задач
+// и отменяет работников при deadline.
 func (p *Pool) Shutdown(ctx context.Context) error {
-	if p.stopped.CompareAndSwap(false, true) {
-		p.cancel()
-	}
+	p.shutdownOnce.Do(func() {
+		p.mu.Lock()
+		p.stopped = true
+		close(p.stopCh)
+		p.mu.Unlock()
 
-	done := make(chan struct{})
-	go func() {
-		p.wg.Wait()
-		close(done)
-	}()
+		go func() {
+			// Ждём уже начатые вызовы Submit().
+			p.submitWG.Wait()
+
+			// После этого отправителей в taskCh
+			// больше нет — его безопасно закрыть.
+			close(p.taskCh)
+
+			// Ждём, пока все workerLoop закончатся.
+			p.wg.Wait()
+
+			close(p.shutdownDone)
+		}()
+	})
 
 	select {
-	case <-done:
+	case <-p.shutdownDone:
+		p.cancel()
 		return nil
+
 	case <-ctx.Done():
+		p.cancel()
 		return ctx.Err()
 	}
 }
 
-// workerLoop — цикл обработки одного воркера.
 func (p *Pool) workerLoop() {
-	for {
-		select {
-		case <-p.ctx.Done():
+	for task := range p.taskCh {
+		if p.ctx.Err() != nil {
 			return
-		case task, ok := <-p.taskCh:
-			if !ok {
-				return // канал закрыт
-			}
-			p.processTask(task)
 		}
+
+		p.processTask(task)
 	}
 }
 
-// processTask отправляет уведомление с таймаутом.
-func (p *Pool) processTask(task domain.NotificationTask) {
-	ctx, cancel := context.WithTimeout(p.ctx, 10*time.Second)
+func (p *Pool) processTask(
+	task domain.NotificationTask,
+) {
+	ctx, cancel := context.WithTimeout(
+		p.ctx,
+		10*time.Second,
+	)
 	defer cancel()
 
-	if err := p.sender.Send(ctx, task.UserID, task.Message); err != nil {
+	if err := p.sender.Send(
+		ctx,
+		task.UserID,
+		task.Message,
+	); err != nil {
 		logger.Log.Error().
 			Err(err).
 			Str("user_id", task.UserID).

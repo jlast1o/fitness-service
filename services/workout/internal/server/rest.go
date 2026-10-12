@@ -8,6 +8,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
+	"github.com/rs/cors"
 
 	"fitness-platform/pkg/logger"
 	"fitness-platform/pkg/middleware"
@@ -22,6 +23,13 @@ func RunREST(addr string, workoutHandler *handler.WorkoutHandler, jwtSecret stri
 	r := chi.NewRouter()
 
 	registry, httpMetrics := appmetrics.NewServiceRegistry()
+
+	r.Use(cors.New(cors.Options{
+		AllowedOrigins:   []string{"http://localhost:3001"},
+		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type"},
+		AllowCredentials: true,
+	}).Handler)
 
 	r.Use(chimiddleware.RequestID)
 	r.Use(chimiddleware.RealIP)

@@ -49,25 +49,49 @@ func NewRedisConsumer(
 	}
 }
 
+// Старый API для совместимости с тестами.
 func (c *RedisConsumer) Run(ctx context.Context) {
+	c.RunWithContexts(ctx, ctx)
+}
+
+// pollCtx — ожидание Redis и получение новой работы.
+// workCtx — выполнение Send и последующий XACK.
+func (c *RedisConsumer) RunWithContexts(
+	pollCtx context.Context,
+	workCtx context.Context,
+) {
 	redisstartup.Runner{
-		Client:         c.redisClient,
-		Stream:         c.stream,
-		Group:          c.group,
-		Service:        "notification",
-		RecoverPending: c.recoverPendingBatch,
-		ReadNew:        c.processBatch,
+		Client:  c.redisClient,
+		Stream:  c.stream,
+		Group:   c.group,
+		Service: "notification",
+
+		RecoverPending: func(ctx context.Context) error {
+			return c.recoverPendingWithContexts(ctx, workCtx)
+		},
+
+		ReadNew: func(ctx context.Context) error {
+			return c.readBatchWithContexts(ctx, workCtx)
+		},
+
 		OnGroupReady: func() {
 			c.claimStart = "0-0"
 		},
-	}.Run(ctx)
+	}.Run(pollCtx)
 }
 
+// Совместимость с существующими тестами.
 func (c *RedisConsumer) recoverPendingBatch(
 	ctx context.Context,
 ) error {
+	return c.recoverPendingWithContexts(ctx, ctx)
+}
+
+func (c *RedisConsumer) recoverPendingWithContexts(
+	pollCtx, workCtx context.Context,
+) error {
 	messages, nextStart, err := c.redisClient.XAutoClaim(
-		ctx,
+		pollCtx,
 		&redis.XAutoClaimArgs{
 			Stream:   c.stream,
 			Group:    c.group,
@@ -89,15 +113,28 @@ func (c *RedisConsumer) recoverPendingBatch(
 			Int("count", len(messages)).
 			Msg("recovered notification pending messages")
 
-		c.processMessages(ctx, messages)
+		c.processMessagesWithContexts(
+			pollCtx,
+			workCtx,
+			messages,
+		)
 	}
 
 	return nil
 }
 
-func (c *RedisConsumer) processBatch(ctx context.Context) error {
+// Совместимость со старым API.
+func (c *RedisConsumer) processBatch(
+	ctx context.Context,
+) error {
+	return c.readBatchWithContexts(ctx, ctx)
+}
+
+func (c *RedisConsumer) readBatchWithContexts(
+	pollCtx, workCtx context.Context,
+) error {
 	streams, err := c.redisClient.XReadGroup(
-		ctx,
+		pollCtx,
 		&redis.XReadGroupArgs{
 			Group:    c.group,
 			Consumer: c.consumer,
@@ -116,18 +153,32 @@ func (c *RedisConsumer) processBatch(ctx context.Context) error {
 	}
 
 	for _, stream := range streams {
-		c.processMessages(ctx, stream.Messages)
+		c.processMessagesWithContexts(
+			pollCtx,
+			workCtx,
+			stream.Messages,
+		)
 	}
 
 	return nil
 }
 
+// Совместимость с существующими вызовами.
 func (c *RedisConsumer) processMessages(
 	ctx context.Context,
 	messages []redis.XMessage,
 ) {
+	c.processMessagesWithContexts(ctx, ctx, messages)
+}
+
+func (c *RedisConsumer) processMessagesWithContexts(
+	pollCtx, workCtx context.Context,
+	messages []redis.XMessage,
+) {
 	for _, message := range messages {
-		if ctx.Err() != nil {
+		// Не начинаем обработку следующего сообщения
+		// после сигнала остановки.
+		if pollCtx.Err() != nil || workCtx.Err() != nil {
 			return
 		}
 
@@ -138,7 +189,7 @@ func (c *RedisConsumer) processMessages(
 				Str("redis_message_id", message.ID).
 				Msg("failed to parse event envelope")
 
-			c.ackMessage(ctx, message.ID)
+			c.ackMessage(workCtx, message.ID)
 			continue
 		}
 
@@ -148,7 +199,7 @@ func (c *RedisConsumer) processMessages(
 				Int("event_version", envelope.EventVersion).
 				Msg("unsupported event version")
 
-			c.ackMessage(ctx, message.ID)
+			c.ackMessage(workCtx, message.ID)
 			continue
 		}
 
@@ -165,7 +216,7 @@ func (c *RedisConsumer) processMessages(
 					Str("event_id", envelope.EventID).
 					Msg("failed to unmarshal workout.created")
 
-				c.ackMessage(ctx, message.ID)
+				c.ackMessage(workCtx, message.ID)
 				continue
 			}
 
@@ -178,10 +229,9 @@ func (c *RedisConsumer) processMessages(
 				),
 			}
 
-			// Отправляем непосредственно здесь.
-			// Больше не складываем задачу в RAM-очередь.
+			// Уже начатая отправка НЕ использует pollCtx.
 			sendCtx, cancel := context.WithTimeout(
-				ctx,
+				workCtx,
 				notificationSendTimeout,
 			)
 
@@ -197,22 +247,23 @@ func (c *RedisConsumer) processMessages(
 					Err(err).
 					Str("event_id", envelope.EventID).
 					Str("redis_message_id", message.ID).
-					Msg("failed to send notification; leaving message pending")
+					Msg(
+						"failed to send notification; leaving message pending",
+					)
 
 				// Нет ACK.
-				// XAUTOCLAIM сможет повторить попытку.
 				return
 			}
 
 			// ACK только после успешного Send().
-			c.ackMessage(ctx, message.ID)
+			c.ackMessage(workCtx, message.ID)
 
 		case events.TypeWorkoutUpdated:
 			logger.Log.Debug().
 				Str("event_id", envelope.EventID).
 				Msg("workout.updated is not handled by notification")
 
-			c.ackMessage(ctx, message.ID)
+			c.ackMessage(workCtx, message.ID)
 
 		default:
 			logger.Log.Debug().
@@ -220,7 +271,7 @@ func (c *RedisConsumer) processMessages(
 				Str("event_type", envelope.EventType).
 				Msg("event type is not handled by notification")
 
-			c.ackMessage(ctx, message.ID)
+			c.ackMessage(workCtx, message.ID)
 		}
 	}
 }

@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"sync"
 	"time"
 
 	"github.com/golang-migrate/migrate/v4"
@@ -37,6 +36,12 @@ func main() {
 	// 3. Корневой контекст
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	pollCtx, stopPolling := context.WithCancel(ctx)
+	defer stopPolling()
+
+	workCtx, cancelWork := context.WithCancel(ctx)
+	defer cancelWork()
 
 	// 4. Инициализация трассировки
 	tracingShutdown, err := tracing.Init(
@@ -118,24 +123,28 @@ func main() {
 		5*time.Second,
 	)
 
-	var wg sync.WaitGroup
-	wg.Add(1)
+	publisherDone := make(chan struct{})
+
 	go func() {
-		defer wg.Done()
-		publisher.Run(ctx)
+		defer close(publisherDone)
+
+		publisher.RunWithContexts(
+			pollCtx,
+			workCtx,
+		)
 	}()
 
-	// 10. Graceful shutdown
-	shutdown.Graceful(
-		ctx,
-		cancel,
+	if err := shutdown.GracefulDrain(
+		stopPolling,
+		cancelWork,
+		publisherDone,
 		httpShutdown,
-		func(ctx context.Context) error {
-			wg.Wait()
-			return nil
-		},
 		tracingShutdown,
-	)
+	); err != nil {
+		logger.Log.Error().
+			Err(err).
+			Msg("incomplete workout shutdown")
+	}
 }
 
 // runMigrations применяет SQL-миграции.

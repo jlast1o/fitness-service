@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"sync"
 
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
@@ -27,11 +26,24 @@ func main() {
 
 	cfg, err := config.Load()
 	if err != nil {
-		logger.Log.Fatal().Err(err).Msg("Failed to load config")
+		logger.Log.Fatal().
+			Err(err).
+			Msg("Failed to load config")
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	// Корневой контекст.
+	ctx, cancel := context.WithCancel(
+		context.Background(),
+	)
 	defer cancel()
+
+	// Контекст получения сообщений.
+	pollCtx, stopPolling := context.WithCancel(ctx)
+	defer stopPolling()
+
+	// Контекст активной обработки.
+	workCtx, cancelWork := context.WithCancel(ctx)
+	defer cancelWork()
 
 	tracingShutdown, err := tracing.Init(
 		ctx,
@@ -44,24 +56,48 @@ func main() {
 			Msg("Failed to initialize tracing")
 	}
 
-	pool, err := database.NewPool(ctx, cfg.DatabaseURL, cfg.DatabaseConnectTimeout, cfg.DatabaseOperationTimeout)
+	// PostgreSQL.
+	pool, err := database.NewPool(
+		ctx,
+		cfg.DatabaseURL,
+		cfg.DatabaseConnectTimeout,
+		cfg.DatabaseOperationTimeout,
+	)
 	if err != nil {
-		logger.Log.Fatal().Err(err).Msg("Failed to connect to database")
+		logger.Log.Fatal().
+			Err(err).
+			Msg("Failed to connect to database")
 	}
 	defer pool.Close()
 
+	// Миграции.
 	if err := runMigrations(cfg.DatabaseURL); err != nil {
-		logger.Log.Fatal().Err(err).Msg("Failed to run migrations")
+		logger.Log.Fatal().
+			Err(err).
+			Msg("Failed to run migrations")
 	}
 
-	plannerRepo := postgres.NewPlannerRepo(pool, cfg.DatabaseOperationTimeout)
-	plannerService := service.NewPlannerService(plannerRepo)
-	plannerHandler := handler.NewPlannerHandler(plannerService)
+	// Бизнес-слои.
+	plannerRepo := postgres.NewPlannerRepo(
+		pool,
+		cfg.DatabaseOperationTimeout,
+	)
 
-	redisClient := redis.NewClient(&redis.Options{Addr: cfg.RedisAddr})
+	plannerService := service.NewPlannerService(
+		plannerRepo,
+	)
 
+	plannerHandler := handler.NewPlannerHandler(
+		plannerService,
+	)
+
+	// Redis.
+	redisClient := redis.NewClient(&redis.Options{
+		Addr: cfg.RedisAddr,
+	})
 	defer redisClient.Close()
 
+	// HTTP-сервер.
 	httpShutdown, err := server.RunREST(
 		fmt.Sprintf(":%s", cfg.HTTPPort),
 		plannerHandler,
@@ -71,11 +107,13 @@ func main() {
 			return pool.Ping(ctx)
 		},
 	)
-
 	if err != nil {
-		logger.Log.Fatal().Err(err).Msg("Failed to start HTTP server")
+		logger.Log.Fatal().
+			Err(err).
+			Msg("Failed to start HTTP server")
 	}
 
+	// Redis Consumer.
 	plannerConsumer := consumer.NewRedisConsumer(
 		redisClient,
 		"workout.events",
@@ -86,30 +124,50 @@ func main() {
 		cfg.RedisConsumerClaimCount,
 	)
 
-	var wg sync.WaitGroup
-	wg.Add(1)
+	consumerDone := make(chan struct{})
+
 	go func() {
-		defer wg.Done()
-		plannerConsumer.Run(ctx)
+		defer close(consumerDone)
+
+		plannerConsumer.RunWithContexts(
+			pollCtx,
+			workCtx,
+		)
 	}()
 
-	shutdown.Graceful(ctx, cancel,
+	// Управляемое завершение.
+	if err := shutdown.GracefulDrain(
+		stopPolling,
+		cancelWork,
+		consumerDone,
 		httpShutdown,
-		func(ctx context.Context) error {
-			wg.Wait()
-			return nil
-		},
 		tracingShutdown,
-	)
+	); err != nil {
+		logger.Log.Error().
+			Err(err).
+			Msg("incomplete graceful shutdown")
+	}
 }
 
 func runMigrations(databaseURL string) error {
-	m, err := migrate.New("file://migrations", databaseURL)
+	m, err := migrate.New(
+		"file://migrations",
+		databaseURL,
+	)
 	if err != nil {
-		return fmt.Errorf("failed to create migrate instance: %w", err)
+		return fmt.Errorf(
+			"failed to create migrate instance: %w",
+			err,
+		)
 	}
-	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
-		return fmt.Errorf("failed to apply migrations: %w", err)
+
+	if err := m.Up(); err != nil &&
+		err != migrate.ErrNoChange {
+		return fmt.Errorf(
+			"failed to apply migrations: %w",
+			err,
+		)
 	}
+
 	return nil
 }

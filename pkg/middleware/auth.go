@@ -26,13 +26,22 @@ func JWTAuth(secret string) func(http.Handler) http.Handler {
 			}
 
 			// 2. Парсим токен, проверяем подпись и алгоритм
-			token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
-				// Проверяем, что используется HMAC SHA256, чтобы избежать атак смены алгоритма
-				if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-					return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
-				}
-				return []byte(secret), nil
-			})
+			token, err := jwt.Parse(
+				tokenString,
+				func(token *jwt.Token) (interface{}, error) {
+					if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+						return nil, fmt.Errorf(
+							"unexpected signing method: %v",
+							token.Header["alg"],
+						)
+					}
+
+					return []byte(secret), nil
+				},
+				jwt.WithValidMethods([]string{
+					jwt.SigningMethodHS256.Alg(),
+				}),
+			)
 			if err != nil || !token.Valid {
 				writeUnauthorized(w, "invalid token")
 				return

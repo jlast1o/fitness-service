@@ -9,6 +9,7 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
+	"fitness-platform/pkg/eventdlq"
 	"fitness-platform/pkg/events"
 	"fitness-platform/pkg/logger"
 	"fitness-platform/pkg/redisstartup"
@@ -49,7 +50,7 @@ func NewRedisConsumer(
 	}
 }
 
-// Прежний метод сохраняем.
+// Старый метод сохраняем.
 func (c *RedisConsumer) Run(ctx context.Context) {
 	c.RunWithContexts(ctx, ctx)
 }
@@ -109,24 +110,26 @@ func (c *RedisConsumer) recoverPendingWithContexts(
 		return fmt.Errorf("xautoclaim: %w", err)
 	}
 
-	c.claimStart = nextStart
-
 	if len(messages) > 0 {
 		logger.Log.Info().
 			Int("count", len(messages)).
 			Msg("recovered planner pending messages")
 
-		c.processMessagesWithContexts(
+		if err := c.processMessagesWithContexts(
 			pollCtx,
 			workCtx,
 			messages,
-		)
+		); err != nil {
+			return err
+		}
 	}
 
+	// При ошибке DLQ cursor не продвигаем.
+	c.claimStart = nextStart
 	return nil
 }
 
-// Сохраняем прежний интерфейс для тестов.
+// Старый интерфейс оставляем для тестов.
 func (c *RedisConsumer) processBatch(
 	ctx context.Context,
 ) error {
@@ -156,11 +159,13 @@ func (c *RedisConsumer) readBatchWithContexts(
 	}
 
 	for _, stream := range streams {
-		c.processMessagesWithContexts(
+		if err := c.processMessagesWithContexts(
 			pollCtx,
 			workCtx,
 			stream.Messages,
-		)
+		); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -170,21 +175,25 @@ func (c *RedisConsumer) processMessages(
 	ctx context.Context,
 	messages []redis.XMessage,
 ) {
-	c.processMessagesWithContexts(
+	if err := c.processMessagesWithContexts(
 		ctx,
 		ctx,
 		messages,
-	)
+	); err != nil {
+		logger.Log.Error().
+			Err(err).
+			Msg("redis consumer batch failed")
+	}
 }
 
 func (c *RedisConsumer) processMessagesWithContexts(
 	pollCtx, workCtx context.Context,
 	messages []redis.XMessage,
-) {
+) error {
 	for _, message := range messages {
-		// После SIGTERM новые бизнес-операции не начинаем.
+		// Не начинаем новые операции после отмены polling.
 		if pollCtx.Err() != nil || workCtx.Err() != nil {
-			return
+			return nil
 		}
 
 		envelope, err := parseEnvelope(message.Values)
@@ -194,7 +203,18 @@ func (c *RedisConsumer) processMessagesWithContexts(
 				Str("redis_message_id", message.ID).
 				Msg("failed to parse event envelope")
 
-			c.ackMessage(workCtx, message.ID)
+			if dlqErr := eventdlq.PublishAndAck(
+				workCtx,
+				c.redisClient,
+				c.stream,
+				c.group,
+				message,
+				eventdlq.InvalidEnvelope,
+				err.Error(),
+			); dlqErr != nil {
+				return dlqErr
+			}
+
 			continue
 		}
 
@@ -204,7 +224,21 @@ func (c *RedisConsumer) processMessagesWithContexts(
 				Int("event_version", envelope.EventVersion).
 				Msg("unsupported event version")
 
-			c.ackMessage(workCtx, message.ID)
+			if dlqErr := eventdlq.PublishAndAck(
+				workCtx,
+				c.redisClient,
+				c.stream,
+				c.group,
+				message,
+				eventdlq.UnsupportedVersion,
+				fmt.Sprintf(
+					"event version %d",
+					envelope.EventVersion,
+				),
+			); dlqErr != nil {
+				return dlqErr
+			}
+
 			continue
 		}
 
@@ -221,11 +255,21 @@ func (c *RedisConsumer) processMessagesWithContexts(
 					Str("event_id", envelope.EventID).
 					Msg("failed to unmarshal workout.created")
 
-				c.ackMessage(workCtx, message.ID)
+				if dlqErr := eventdlq.PublishAndAck(
+					workCtx,
+					c.redisClient,
+					c.stream,
+					c.group,
+					message,
+					eventdlq.InvalidPayload,
+					err.Error(),
+				); dlqErr != nil {
+					return dlqErr
+				}
+
 				continue
 			}
 
-			// Активная обработка использует workCtx.
 			if err := c.planner.ProcessWorkoutCreated(
 				workCtx,
 				envelope.EventID,
@@ -237,10 +281,11 @@ func (c *RedisConsumer) processMessagesWithContexts(
 					Str("redis_message_id", message.ID).
 					Msg("failed to process workout.created")
 
-				// Без успешной обработки ACK запрещён.
+				// Ошибка БД — сообщение остаётся pending.
 				continue
 			}
 
+			// ACK только после успешной бизнес-операции.
 			c.ackMessage(workCtx, message.ID)
 
 		case events.TypeWorkoutUpdated:
@@ -259,6 +304,8 @@ func (c *RedisConsumer) processMessagesWithContexts(
 			c.ackMessage(workCtx, message.ID)
 		}
 	}
+
+	return nil
 }
 
 func parseEnvelope(
@@ -278,6 +325,15 @@ func parseEnvelope(
 		return envelope, fmt.Errorf(
 			"unmarshal event envelope: %w",
 			err,
+		)
+	}
+
+	if envelope.EventID == "" ||
+		envelope.EventType == "" ||
+		len(envelope.Payload) == 0 ||
+		string(envelope.Payload) == "null" {
+		return envelope, errors.New(
+			"incomplete event envelope",
 		)
 	}
 

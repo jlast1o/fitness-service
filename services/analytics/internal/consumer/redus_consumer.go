@@ -9,6 +9,7 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
+	"fitness-platform/pkg/eventdlq"
 	"fitness-platform/pkg/events"
 	"fitness-platform/pkg/logger"
 	"fitness-platform/pkg/redisstartup"
@@ -49,12 +50,13 @@ func NewRedisConsumer(
 	}
 }
 
-// Сохраняем прежний API для существующих тестов.
+// Старый API остаётся для совместимости.
 func (c *RedisConsumer) Run(ctx context.Context) {
 	c.RunWithContexts(ctx, ctx)
 }
 
-// Новый API: отдельно polling и обработка события.
+// pollCtx управляет получением новых сообщений.
+// workCtx используется для уже начатой обработки.
 func (c *RedisConsumer) RunWithContexts(
 	pollCtx, workCtx context.Context,
 ) {
@@ -84,7 +86,7 @@ func (c *RedisConsumer) RunWithContexts(
 	}.Run(pollCtx)
 }
 
-// Совместимость со старыми вызовами.
+// Совместимость с существующими тестами.
 func (c *RedisConsumer) recoverPendingBatch(
 	ctx context.Context,
 ) error {
@@ -110,25 +112,26 @@ func (c *RedisConsumer) recoverPendingWithContexts(
 		return fmt.Errorf("xautoclaim: %w", err)
 	}
 
-	// Меняем курсор только после успешного Redis-запроса.
-	c.claimStart = nextStart
-
 	if len(messages) > 0 {
 		logger.Log.Info().
 			Int("count", len(messages)).
 			Msg("recovered analytics pending messages")
 
-		c.processMessagesWithContexts(
+		if err := c.processMessagesWithContexts(
 			pollCtx,
 			workCtx,
 			messages,
-		)
+		); err != nil {
+			return err
+		}
 	}
 
+	// При ошибке DLQ не продвигаем cursor.
+	c.claimStart = nextStart
 	return nil
 }
 
-// Совместимость со старыми вызовами.
+// Совместимость со старым API.
 func (c *RedisConsumer) processBatch(
 	ctx context.Context,
 ) error {
@@ -149,7 +152,6 @@ func (c *RedisConsumer) readBatchWithContexts(
 		},
 	).Result()
 
-	// Отсутствие новых сообщений — не ошибка.
 	if errors.Is(err, redis.Nil) {
 		return nil
 	}
@@ -159,36 +161,42 @@ func (c *RedisConsumer) readBatchWithContexts(
 	}
 
 	for _, stream := range streams {
-		c.processMessagesWithContexts(
+		if err := c.processMessagesWithContexts(
 			pollCtx,
 			workCtx,
 			stream.Messages,
-		)
+		); err != nil {
+			return err
+		}
 	}
 
 	return nil
 }
 
-// Сохраняем метод для существующих тестов.
+// Старый метод сохраняем для тестов и вызовов.
 func (c *RedisConsumer) processMessages(
 	ctx context.Context,
 	messages []redis.XMessage,
 ) {
-	c.processMessagesWithContexts(
+	if err := c.processMessagesWithContexts(
 		ctx,
 		ctx,
 		messages,
-	)
+	); err != nil {
+		logger.Log.Error().
+			Err(err).
+			Msg("redis consumer batch failed")
+	}
 }
 
 func (c *RedisConsumer) processMessagesWithContexts(
 	pollCtx, workCtx context.Context,
 	messages []redis.XMessage,
-) {
+) error {
 	for _, message := range messages {
-		// Не начинаем следующую операцию после SIGTERM.
+		// После SIGTERM не начинаем следующую обработку.
 		if pollCtx.Err() != nil || workCtx.Err() != nil {
-			return
+			return nil
 		}
 
 		envelope, err := parseEnvelope(message.Values)
@@ -198,7 +206,19 @@ func (c *RedisConsumer) processMessagesWithContexts(
 				Str("redis_message_id", message.ID).
 				Msg("failed to parse event envelope")
 
-			c.ackMessage(workCtx, message.ID)
+			// Сначала DLQ, потом ACK оригинала.
+			if dlqErr := eventdlq.PublishAndAck(
+				workCtx,
+				c.redisClient,
+				c.stream,
+				c.group,
+				message,
+				eventdlq.InvalidEnvelope,
+				err.Error(),
+			); dlqErr != nil {
+				return dlqErr
+			}
+
 			continue
 		}
 
@@ -209,7 +229,21 @@ func (c *RedisConsumer) processMessagesWithContexts(
 				Int("event_version", envelope.EventVersion).
 				Msg("unsupported event version")
 
-			c.ackMessage(workCtx, message.ID)
+			if dlqErr := eventdlq.PublishAndAck(
+				workCtx,
+				c.redisClient,
+				c.stream,
+				c.group,
+				message,
+				eventdlq.UnsupportedVersion,
+				fmt.Sprintf(
+					"event version %d",
+					envelope.EventVersion,
+				),
+			); dlqErr != nil {
+				return dlqErr
+			}
+
 			continue
 		}
 
@@ -227,11 +261,22 @@ func (c *RedisConsumer) processMessagesWithContexts(
 					Str("redis_message_id", message.ID).
 					Msg("failed to unmarshal workout.created payload")
 
-				c.ackMessage(workCtx, message.ID)
+				if dlqErr := eventdlq.PublishAndAck(
+					workCtx,
+					c.redisClient,
+					c.stream,
+					c.group,
+					message,
+					eventdlq.InvalidPayload,
+					err.Error(),
+				); dlqErr != nil {
+					return dlqErr
+				}
+
 				continue
 			}
 
-			// Бизнес-операция использует workCtx.
+			// Ошибки бизнес-логики НЕ отправляем в DLQ.
 			if err := c.analytics.ProcessWorkoutCreated(
 				workCtx,
 				envelope.EventID,
@@ -243,11 +288,11 @@ func (c *RedisConsumer) processMessagesWithContexts(
 					Str("redis_message_id", message.ID).
 					Msg("failed to process workout.created event")
 
-				// При ошибке НЕ подтверждаем событие.
+				// Нет ACK: событие остаётся pending.
 				continue
 			}
 
-			// ACK после успешной бизнес-операции.
+			// Успешная бизнес-обработка.
 			c.ackMessage(workCtx, message.ID)
 
 		case events.TypeWorkoutUpdated:
@@ -258,6 +303,8 @@ func (c *RedisConsumer) processMessagesWithContexts(
 			c.ackMessage(workCtx, message.ID)
 
 		default:
+			// Корректный, но неизвестный тип не обязан
+			// обрабатываться этим consumer.
 			logger.Log.Debug().
 				Str("event_id", envelope.EventID).
 				Str("event_type", envelope.EventType).
@@ -266,6 +313,8 @@ func (c *RedisConsumer) processMessagesWithContexts(
 			c.ackMessage(workCtx, message.ID)
 		}
 	}
+
+	return nil
 }
 
 func parseEnvelope(
@@ -285,6 +334,17 @@ func parseEnvelope(
 		return envelope, fmt.Errorf(
 			"unmarshal event envelope: %w",
 			err,
+		)
+	}
+
+	// JSON мог быть синтаксически корректным,
+	// но не содержать обязательные поля.
+	if envelope.EventID == "" ||
+		envelope.EventType == "" ||
+		len(envelope.Payload) == 0 ||
+		string(envelope.Payload) == "null" {
+		return envelope, errors.New(
+			"incomplete event envelope",
 		)
 	}
 

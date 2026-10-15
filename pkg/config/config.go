@@ -33,6 +33,10 @@ type Config struct {
 	RedisMaxRetries  int `envconfig:"REDIS_MAX_RETRIES" default:"-1"` // отключаем автоматические повторные попытки, чтобы не блокировать обработку запросов
 	RedisDialRetries int `envconfig:"REDIS_DIAL_RETRIES" default:"1"` // количество попыток подключения к Redis при старте приложения (0 = default, default = 5)
 
+	OutboxRetention        time.Duration `envconfig:"OUTBOX_RETENTION" default:"720h"`
+	OutboxCleanupInterval  time.Duration `envconfig:"OUTBOX_CLEANUP_INTERVAL" default:"5m"`
+	OutboxCleanupBatchSize int           `envconfig:"OUTBOX_CLEANUP_BATCH_SIZE" default:"500"`
+
 	OTLPEndpoint string `envconfig:"TRACING_OTLP_ENDPOINT" default:"localhost:4317"`
 }
 

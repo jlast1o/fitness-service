@@ -156,3 +156,61 @@ func (r *OutboxRepo) MarkOutboxEventPublishedClaimed(
 
 	return nil
 }
+
+func (r *OutboxRepo) DeletePublishedBefore(
+	ctx context.Context,
+	before time.Time,
+	limit int,
+) (int64, error) {
+	if before.IsZero() {
+		return 0, errors.New(
+			"outbox retention cutoff must not be zero",
+		)
+	}
+
+	if limit <= 0 || limit > 1000 {
+		return 0, errors.New(
+			"outbox cleanup limit must be between 1 and 1000",
+		)
+	}
+
+	if r.operationTimeout > 0 {
+		var cancel context.CancelFunc
+
+		ctx, cancel = context.WithTimeout(
+			ctx,
+			r.operationTimeout,
+		)
+		defer cancel()
+	}
+
+	const query = `
+		WITH candidates AS (
+			SELECT id
+			FROM outbox_events
+			WHERE published_at IS NOT NULL
+			  AND published_at < $1
+			ORDER BY published_at, id
+			FOR UPDATE SKIP LOCKED
+			LIMIT $2
+		)
+		DELETE FROM outbox_events AS o
+		USING candidates
+		WHERE o.id = candidates.id
+	`
+
+	tag, err := r.pool.Exec(
+		ctx,
+		query,
+		before,
+		limit,
+	)
+	if err != nil {
+		return 0, fmt.Errorf(
+			"delete expired published outbox events: %w",
+			err,
+		)
+	}
+
+	return tag.RowsAffected(), nil
+}

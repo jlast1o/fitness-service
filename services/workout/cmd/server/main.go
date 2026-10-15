@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/golang-migrate/migrate/v4"
@@ -123,10 +124,26 @@ func main() {
 		5*time.Second,
 	)
 
-	publisherDone := make(chan struct{})
+	cleaner, err := outbox.NewCleaner(
+		outboxRepo,
+		cfg.OutboxRetention,
+		cfg.OutboxCleanupInterval,
+		cfg.OutboxCleanupBatchSize,
+	)
+	if err != nil {
+		logger.Log.Fatal().
+			Err(err).
+			Msg("invalid outbox retention configuration")
+	}
 
+	backgroundDone := make(chan struct{})
+
+	var backgroundWG sync.WaitGroup
+	backgroundWG.Add(2)
+
+	// Первый фоновый компонент — Outbox Publisher.
 	go func() {
-		defer close(publisherDone)
+		defer backgroundWG.Done()
 
 		publisher.RunWithContexts(
 			pollCtx,
@@ -134,10 +151,26 @@ func main() {
 		)
 	}()
 
+	// Второй — Outbox Cleaner.
+	go func() {
+		defer backgroundWG.Done()
+
+		cleaner.RunWithContexts(
+			pollCtx,
+			workCtx,
+		)
+	}()
+
+	// Общий сигнал завершения фоновых компонентов.
+	go func() {
+		backgroundWG.Wait()
+		close(backgroundDone)
+	}()
+
 	if err := shutdown.GracefulDrain(
 		stopPolling,
 		cancelWork,
-		publisherDone,
+		backgroundDone,
 		httpShutdown,
 		tracingShutdown,
 	); err != nil {
